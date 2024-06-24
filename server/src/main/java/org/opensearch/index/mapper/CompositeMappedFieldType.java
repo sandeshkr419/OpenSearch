@@ -45,7 +45,10 @@ public abstract class CompositeMappedFieldType extends MappedFieldType {
 
     /**
      * Supported composite field types
+     *
+     * @opensearch.experimental
      */
+    @ExperimentalApi
     public enum CompositeFieldType {
         STAR_TREE("star_tree");
 
@@ -65,8 +68,12 @@ public abstract class CompositeMappedFieldType extends MappedFieldType {
                     return metric;
                 }
             }
-            throw new IllegalArgumentException("Invalid metric stat: " + name);
+            throw new IllegalArgumentException("Invalid composite field type: " + name);
         }
+    }
+
+    public CompositeFieldType getCompositeIndexType() {
+        return type;
     }
 
     public List<String> fields() {
