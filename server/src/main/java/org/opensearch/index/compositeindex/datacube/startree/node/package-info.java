@@ -7,6 +7,6 @@
  */
 
 /**
- * Star Tree Node Package
+ * Holds classes associated with star tree node
  */
 package org.opensearch.index.compositeindex.datacube.startree.node;

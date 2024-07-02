@@ -5,13 +5,22 @@
  * this file be licensed under the Apache-2.0 license or a
  * compatible open source license.
  */
+
 package org.opensearch.index.compositeindex.datacube.startree.node;
+
+import org.opensearch.common.annotation.ExperimentalApi;
 
 import java.io.IOException;
 import java.util.Iterator;
 
-/** Class representing each node in star tree */
+/**
+ * Interface that represents star tree node
+ *
+ * @opensearch.experimental
+ */
+@ExperimentalApi
 public interface StarTreeNode {
+    long ALL = -1l;
 
     /** Get the index of the dimension. */
     int getDimensionId() throws IOException;
