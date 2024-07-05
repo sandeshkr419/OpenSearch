@@ -7,8 +7,15 @@
  */
 package org.opensearch.index.compositeindex.datacube.startree.utils;
 
+import org.apache.lucene.index.SegmentWriteState;
+import org.apache.lucene.store.IndexOutput;
 import org.opensearch.common.annotation.ExperimentalApi;
+import org.opensearch.index.compositeindex.datacube.startree.StarTreeField;
+import org.opensearch.index.compositeindex.datacube.startree.aggregators.MetricAggregatorInfo;
+import org.opensearch.index.mapper.CompositeMappedFieldType;
 
+import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -67,6 +74,31 @@ public class StarTreeBuilderUtils {
          * A map containing the child nodes of this star-tree node, keyed by their dimension id.
          */
         public Map<Long, TreeNode> children;
+    }
+
+    public static long serializeStarTree(IndexOutput dataOut, TreeNode rootNode, int numNodes) throws IOException {
+        return StarTreeDataSerializer.serializeStarTree(dataOut, rootNode, numNodes);
+    }
+
+    public static void serializeStarTreeMetadata(
+        IndexOutput dataOut,
+        StarTreeField starTreeField,
+        SegmentWriteState writeState,
+        List<MetricAggregatorInfo> metricAggregatorInfos,
+        Integer segmentAggregatedCount,
+        Integer dataFilePointer,
+        Integer dataFileLength
+    ) throws IOException {
+        StarTreeMetaSerializer.serializeStarTreeMetadata(
+            dataOut,
+            CompositeMappedFieldType.CompositeFieldType.STAR_TREE,
+            starTreeField,
+            writeState,
+            metricAggregatorInfos,
+            segmentAggregatedCount,
+            dataFilePointer,
+            dataFileLength
+        );
     }
 
 }
