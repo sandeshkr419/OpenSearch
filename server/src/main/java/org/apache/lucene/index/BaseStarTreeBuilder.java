@@ -199,7 +199,7 @@ public abstract class BaseStarTreeBuilder implements StarTreeBuilder {
      * @param dimensionId dimension id
      * @return dimension value
      */
-    public abstract long getDimensionValue(int docId, int dimensionId) throws IOException;
+    public abstract Long getDimensionValue(int docId, int dimensionId) throws IOException;
 
     /**
      * Sorts and aggregates the star-tree document in the segment, and returns a star-tree document iterator for all the
@@ -522,10 +522,10 @@ public abstract class BaseStarTreeBuilder implements StarTreeBuilder {
         throws IOException {
         Map<Long, StarTreeBuilderUtils.TreeNode> nodes = new HashMap<>();
         int nodeStartDocId = startDocId;
-        long nodeDimensionValue = getDimensionValue(startDocId, dimensionId);
+        Long nodeDimensionValue = getDimensionValue(startDocId, dimensionId);
         for (int i = startDocId + 1; i < endDocId; i++) {
-            long dimensionValue = getDimensionValue(i, dimensionId);
-            if (dimensionValue != nodeDimensionValue) {
+            Long dimensionValue = getDimensionValue(i, dimensionId);
+            if (!dimensionValue.equals(nodeDimensionValue)) {
                 StarTreeBuilderUtils.TreeNode child = getNewNode();
                 child.dimensionId = dimensionId;
                 child.dimensionValue = nodeDimensionValue;
