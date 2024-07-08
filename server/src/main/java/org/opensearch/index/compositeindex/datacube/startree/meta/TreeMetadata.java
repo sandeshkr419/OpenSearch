@@ -8,10 +8,12 @@
 
 package org.opensearch.index.compositeindex.datacube.startree.meta;
 
+import org.opensearch.index.compositeindex.datacube.startree.StarTreeFieldConfiguration;
 import org.opensearch.index.compositeindex.datacube.startree.aggregators.MetricEntry;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Set;
 
 /**
  * An interface for metadata of the star-tree
@@ -59,6 +61,38 @@ public interface TreeMetadata {
      * @throws IOException if an I/O error occurs while reading the aggregated document count
      */
     int readSegmentAggregatedDocCount() throws IOException;
+
+    /**
+     * Reads the max leaf docs for the star-tree.
+     *
+     * @return the max leaf docs for the star-tree
+     * @throws IOException if an I/O error occurs while reading the max leaf docs
+     */
+    int readMaxLeafDocs() throws IOException;
+
+    /**
+     * Reads the count of dimensions where star node will not be created in the star-tree.
+     *
+     * @return the count of dimensions
+     * @throws IOException if an I/O error occurs while reading the skip star node dimensions count
+     */
+    int readSkipStarNodeCreationInDimsCount() throws IOException;
+
+    /**
+     * Reads the list of dimensions field numbers to be skipped for star node creation in the star-tree.
+     *
+     * @return the set of dimensions field numbers to be skipped for star node creation.
+     * @throws IOException if an I/O error occurs while reading the dimensions
+     */
+    Set<Integer> readSkipStarNodeCreationInDims() throws IOException;
+
+    /**
+     * Reads the build mode for the star-tree.
+     *
+     * @return the star-tree build mode
+     * @throws IOException if an I/O error occurs while reading the build mode
+     */
+    StarTreeFieldConfiguration.StarTreeBuildMode readBuildMode() throws IOException;
 
     /**
      * Reads the file pointer to the start of the star-tree data.

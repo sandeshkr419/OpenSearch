@@ -38,16 +38,22 @@ public class Composite90DocValuesFormat extends DocValuesFormat {
     private final MapperService mapperService;
 
     /** Data codec name for Composite Doc Values Format */
-    public static final String DATA_CODEC_NAME = "Composite90FormatData";
+    public static final String DATA_CODEC_NAME = "Composite99FormatData";
 
     /** Meta codec name for Composite Doc Values Format */
-    public static final String META_CODEC_NAME = "Composite90FormatMeta";
+    public static final String META_CODEC_NAME = "Composite99FormatMeta";
 
     /** Filename extension for the composite index data */
     public static final String DATA_EXTENSION = "sttd";
 
     /** Filename extension for the composite index meta */
     public static final String META_EXTENSION = "sttm";
+
+    /** Data doc values codec name for Composite Doc Values Format */
+    public static final String DATA_DOC_VALUES_CODEC = "Composite99DocValuesData";
+
+    /** Meta doc values codec name for Composite Doc Values Format */
+    static final String META_DOC_VALUES_CODEC = "Composite99DocValuesMetadata";
 
     /** Filename extension for the composite index data doc values */
     public static final String DATA_DOC_VALUES_EXTENSION = "sttddvm";

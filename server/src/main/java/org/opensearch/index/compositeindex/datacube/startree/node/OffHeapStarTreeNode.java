@@ -52,6 +52,10 @@ public class OffHeapStarTreeNode implements StarTreeNode {
         return in.readLong(nodeId * SERIALIZABLE_DATA_SIZE_IN_BYTES + fieldOffset);
     }
 
+    private byte getByte(int fieldOffset) throws IOException {
+        return in.readByte(nodeId * SERIALIZABLE_DATA_SIZE_IN_BYTES + fieldOffset);
+    }
+
     @Override
     public int getDimensionId() throws IOException {
         return getInt(DIMENSION_ID_OFFSET);
@@ -102,7 +106,7 @@ public class OffHeapStarTreeNode implements StarTreeNode {
 
     @Override
     public boolean isStarNode() throws IOException {
-        return getInt(IS_STAR_NODE_OFFSET) != 0;
+        return getByte(IS_STAR_NODE_OFFSET) != 0;
     }
 
     @Override

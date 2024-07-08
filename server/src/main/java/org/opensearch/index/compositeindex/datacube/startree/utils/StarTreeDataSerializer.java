@@ -130,7 +130,7 @@ public class StarTreeDataSerializer {
         output.writeInt(node.startDocId);
         output.writeInt(node.endDocId);
         output.writeInt(node.aggregatedDocId);
-        output.writeInt(node.isStarNode == false ? 0 : 1);
+        output.writeByte(node.isStarNode == false ? (byte) 0 : (byte) 1);
         output.writeInt(firstChildId);
         output.writeInt(lastChildId);
     }

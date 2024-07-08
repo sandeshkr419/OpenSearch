@@ -127,7 +127,6 @@ public abstract class BaseStarTreeBuilder implements StarTreeBuilder {
         for (Metric metric : this.starTreeField.getMetrics()) {
             for (MetricStat metricType : metric.getMetrics()) {
                 IndexNumericFieldData.NumericType numericType;
-                SequentialDocValuesIterator metricStatReader;
                 Mapper fieldMapper = mapperService.documentMapper().mappers().getMapper(metric.getField());
                 if (fieldMapper instanceof NumberFieldMapper) {
                     numericType = ((NumberFieldMapper) fieldMapper).fieldType().numericType();

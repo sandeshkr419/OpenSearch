@@ -38,14 +38,14 @@ public class StarTreeMetaSerializer {
     /**
      * Serializes the star-tree metadata.
      *
-     * @param metaOut               the IndexOutput to write the metadata
-     * @param compositeFieldType    the composite field type of the star-tree field
-     * @param starTreeField         the star-tree field
-     * @param writeState            the segment write state
-     * @param metricAggregatorInfos the list of metric aggregator information
+     * @param metaOut                the IndexOutput to write the metadata
+     * @param compositeFieldType     the composite field type of the star-tree field
+     * @param starTreeField          the star-tree field
+     * @param writeState             the segment write state
+     * @param metricAggregatorInfos  the list of metric aggregator information
      * @param segmentAggregatedCount the aggregated document count for the segment
-     * @param dataFilePointer       the file pointer to the start of the star tree data
-     * @param dataFileLength        the length of the star tree data file
+     * @param dataFilePointer        the file pointer to the start of the star tree data
+     * @param dataFileLength         the length of the star tree data file
      * @throws IOException if an I/O error occurs while serializing the metadata
      */
     public static void serializeStarTreeMetadata(
@@ -60,14 +60,28 @@ public class StarTreeMetaSerializer {
     ) throws IOException {
         long totalSizeInBytes = 0;
 
-        totalSizeInBytes += computeHeaderByteSize(compositeFieldType, starTreeField.getName()); // header size
-        totalSizeInBytes += Integer.BYTES;                                                      // number of dimensions
-        totalSizeInBytes += (long) starTreeField.getDimensionsOrder().size() * Integer.BYTES;   // dimension ids
-        totalSizeInBytes += Integer.BYTES;                                                      // metric count
-        totalSizeInBytes += computeMetricEntriesSizeInBytes(metricAggregatorInfos);                // metric - metric stat pair
-        totalSizeInBytes += Integer.BYTES;                                                      // segment aggregated document count
-        totalSizeInBytes += Long.BYTES;                                                         // data start file pointer
-        totalSizeInBytes += Long.BYTES;                                                         // data length
+        // header size
+        totalSizeInBytes += computeHeaderByteSize(compositeFieldType, starTreeField.getName());
+        // number of dimensions
+        totalSizeInBytes += Integer.BYTES;
+        // dimension field numbers
+        totalSizeInBytes += (long) starTreeField.getDimensionsOrder().size() * Integer.BYTES;
+        // metric count
+        totalSizeInBytes += Integer.BYTES;
+        // metric - metric stat pair
+        totalSizeInBytes += computeMetricEntriesSizeInBytes(metricAggregatorInfos);
+        // segment aggregated document count
+        totalSizeInBytes += Integer.BYTES;
+        // max leaf docs
+        totalSizeInBytes += Integer.BYTES;
+        // skip star node creation dimensions count
+        totalSizeInBytes += Integer.BYTES;
+        // skip star node creation dimensions field numbers
+        totalSizeInBytes += (long) starTreeField.getStarTreeConfig().getSkipStarNodeCreationInDims().size() * Integer.BYTES;
+        // data start file pointer
+        totalSizeInBytes += Long.BYTES;
+        // data length
+        totalSizeInBytes += Long.BYTES;
 
         logger.info("Star tree size in bytes : {}", totalSizeInBytes);
 
@@ -142,13 +156,13 @@ public class StarTreeMetaSerializer {
     /**
      * Writes the star-tree metadata.
      *
-     * @param metaOut               the IndexOutput to write the metadata
-     * @param writeState            the segment write state
-     * @param metricAggregatorInfos the list of metric aggregator information
-     * @param starTreeField         the star tree field
+     * @param metaOut                   the IndexOutput to write the metadata
+     * @param writeState                the segment write state
+     * @param metricAggregatorInfos     the list of metric aggregator information
+     * @param starTreeField             the star tree field
      * @param segmentAggregatedDocCount the aggregated document count for the segment
-     * @param dataFilePointer       the file pointer to the start of the star-tree data
-     * @param dataFileLength        the length of the star-tree data file
+     * @param dataFilePointer           the file pointer to the start of the star-tree data
+     * @param dataFileLength            the length of the star-tree data file
      * @throws IOException if an I/O error occurs while writing the metadata
      */
     private static void writeMeta(
@@ -183,6 +197,21 @@ public class StarTreeMetaSerializer {
 
         // segment aggregated document count
         metaOut.writeInt(segmentAggregatedDocCount);
+
+        // max leaf docs
+        metaOut.writeInt(starTreeField.getStarTreeConfig().maxLeafDocs());
+
+        // number of skip star node creation dimensions
+        metaOut.writeInt(starTreeField.getStarTreeConfig().maxLeafDocs());
+
+        // skip star node creations
+        for (String dimension : starTreeField.getStarTreeConfig().getSkipStarNodeCreationInDims()) {
+            int dimensionFieldNumber = writeState.fieldInfos.fieldInfo(dimension).getFieldNumber();
+            metaOut.writeInt(dimensionFieldNumber);
+        }
+
+        // star tree build-mode
+        metaOut.writeString(starTreeField.getStarTreeConfig().getBuildMode().getTypeName());
 
         // star-tree data file pointer
         metaOut.writeLong(dataFilePointer);

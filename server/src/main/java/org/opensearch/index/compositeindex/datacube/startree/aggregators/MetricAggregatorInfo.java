@@ -80,7 +80,12 @@ public class MetricAggregatorInfo implements Comparable<MetricAggregatorInfo> {
      * @return field name with metric type and field
      */
     public String toFieldName() {
-        return starFieldName + DELIMITER + field + DELIMITER + metricStat.getTypeName();
+        return toFieldName(starFieldName, field, metricStat.getTypeName());
+
+    }
+
+    public static String toFieldName(String starFieldName, String field, String typeName) {
+        return starFieldName + DELIMITER + field + DELIMITER + typeName;
     }
 
     @Override

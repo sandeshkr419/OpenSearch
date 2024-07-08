@@ -12,11 +12,14 @@ import org.apache.logging.log4j.Logger;
 import org.apache.lucene.index.CorruptIndexException;
 import org.apache.lucene.store.IndexInput;
 import org.opensearch.index.compositeindex.datacube.MetricStat;
+import org.opensearch.index.compositeindex.datacube.startree.StarTreeFieldConfiguration;
 import org.opensearch.index.compositeindex.datacube.startree.aggregators.MetricEntry;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Holds the associated metadata for the building of star-tree
@@ -28,9 +31,12 @@ public class StarTreeMetadata implements TreeMetadata {
     private final IndexInput meta;
     private final String starTreeFieldName;
     private final String starTreeFieldType;
-    private final List<Integer> dimensionOrdinals;
+    private final List<Integer> dimensionFieldNumbers;
     private final List<MetricEntry> metricEntries;
     private final Integer segmentAggregatedDocCount;
+    private final Integer maxLeafDocs;
+    private final Set<Integer> skipStarNodeCreationInDims;
+    private final StarTreeFieldConfiguration.StarTreeBuildMode starTreeBuildMode;
     private final long dataStartFilePointer;
     private final long dataLength;
 
@@ -39,9 +45,12 @@ public class StarTreeMetadata implements TreeMetadata {
         try {
             this.starTreeFieldName = compositeFieldName;
             this.starTreeFieldType = compositeFieldType;
-            this.dimensionOrdinals = readStarTreeDimensions();
+            this.dimensionFieldNumbers = readStarTreeDimensions();
             this.metricEntries = readMetricEntries();
             this.segmentAggregatedDocCount = readSegmentAggregatedDocCount();
+            this.maxLeafDocs = readMaxLeafDocs();
+            this.skipStarNodeCreationInDims = readSkipStarNodeCreationInDims();
+            this.starTreeBuildMode = readBuildMode();
             this.dataStartFilePointer = readDataStartFilePointer();
             this.dataLength = readDataLength();
         } catch (Exception e) {
@@ -58,13 +67,13 @@ public class StarTreeMetadata implements TreeMetadata {
     @Override
     public List<Integer> readStarTreeDimensions() throws IOException {
         int dimensionCount = readDimensionsCount();
-        List<Integer> dimensionOrdinals = new ArrayList<>();
+        List<Integer> dimensionFieldNumbers = new ArrayList<>();
 
         for (int i = 0; i < dimensionCount; i++) {
-            dimensionOrdinals.add(meta.readInt());
+            dimensionFieldNumbers.add(meta.readInt());
         }
 
-        return dimensionOrdinals;
+        return dimensionFieldNumbers;
     }
 
     @Override
@@ -89,6 +98,32 @@ public class StarTreeMetadata implements TreeMetadata {
     @Override
     public int readSegmentAggregatedDocCount() throws IOException {
         return meta.readInt();
+    }
+
+    @Override
+    public int readMaxLeafDocs() throws IOException {
+        return meta.readInt();
+    }
+
+    @Override
+    public int readSkipStarNodeCreationInDimsCount() throws IOException {
+        return meta.readInt();
+    }
+
+    @Override
+    public Set<Integer> readSkipStarNodeCreationInDims() throws IOException {
+
+        int skipStarNodeCreationInDimsCount = readSkipStarNodeCreationInDimsCount();
+        Set<Integer> skipStarNodeCreationInDims = new HashSet<>();
+        for (int i = 0; i < skipStarNodeCreationInDimsCount; i++) {
+            skipStarNodeCreationInDims.add(meta.readInt());
+        }
+        return skipStarNodeCreationInDims;
+    }
+
+    @Override
+    public StarTreeFieldConfiguration.StarTreeBuildMode readBuildMode() throws IOException {
+        return StarTreeFieldConfiguration.StarTreeBuildMode.fromTypeName(meta.readString());
     }
 
     @Override
@@ -120,12 +155,12 @@ public class StarTreeMetadata implements TreeMetadata {
     }
 
     /**
-     * Returns the list of dimension ordinals.
+     * Returns the list of dimension field numbers.
      *
-     * @return star-tree dimension ordinals
+     * @return star-tree dimension field numbers
      */
-    public List<Integer> getDimensionOrdinals() {
-        return dimensionOrdinals;
+    public List<Integer> getDimensionFieldNumbers() {
+        return dimensionFieldNumbers;
     }
 
     /**
@@ -144,6 +179,33 @@ public class StarTreeMetadata implements TreeMetadata {
      */
     public Integer getSegmentAggregatedDocCount() {
         return segmentAggregatedDocCount;
+    }
+
+    /**
+     * Returns the max leaf docs for the star-tree.
+     *
+     * @return the max leaf docs.
+     */
+    public Integer getMaxLeafDocs() {
+        return maxLeafDocs;
+    }
+
+    /**
+     * Returns the set of dimensions for which star node will not be created in the star-tree.
+     *
+     * @return the set of dimensions.
+     */
+    public Set<Integer> getSkipStarNodeCreationInDims() {
+        return skipStarNodeCreationInDims;
+    }
+
+    /**
+     * Returns the build mode for the star-tree.
+     *
+     * @return the star-tree build mode.
+     */
+    public StarTreeFieldConfiguration.StarTreeBuildMode getStarTreeBuildMode() {
+        return starTreeBuildMode;
     }
 
     /**
