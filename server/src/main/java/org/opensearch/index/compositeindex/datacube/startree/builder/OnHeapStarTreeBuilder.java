@@ -10,6 +10,7 @@ package org.opensearch.index.compositeindex.datacube.startree.builder;
 import org.apache.lucene.index.BaseStarTreeBuilder;
 import org.apache.lucene.index.SegmentWriteState;
 import org.apache.lucene.search.DocIdSetIterator;
+import org.apache.lucene.store.IndexOutput;
 import org.opensearch.common.annotation.ExperimentalApi;
 import org.opensearch.index.codec.composite.datacube.startree.StarTreeValues;
 import org.opensearch.index.compositeindex.datacube.Dimension;
@@ -28,6 +29,7 @@ import java.util.Objects;
 
 /**
  * On heap based single tree builder
+ *
  * @opensearch.experimental
  */
 @ExperimentalApi
@@ -43,9 +45,14 @@ public class OnHeapStarTreeBuilder extends BaseStarTreeBuilder {
      * @param mapperService     helps with the numeric type of field
      * @throws IOException throws an exception when we are unable to construct a star-tree using on-heap approach
      */
-    public OnHeapStarTreeBuilder(StarTreeField starTreeField, SegmentWriteState segmentWriteState, MapperService mapperService)
-        throws IOException {
-        super(starTreeField, segmentWriteState, mapperService);
+    public OnHeapStarTreeBuilder(
+        IndexOutput metaOut,
+        IndexOutput dataOut,
+        StarTreeField starTreeField,
+        SegmentWriteState segmentWriteState,
+        MapperService mapperService
+    ) throws IOException {
+        super(metaOut, dataOut, starTreeField, segmentWriteState, mapperService);
     }
 
     @Override

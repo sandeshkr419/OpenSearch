@@ -8,5 +8,7 @@
 
 /**
  * Meta package for star tree
+ *
+ * @opensearch.experimental
  */
 package org.opensearch.index.compositeindex.datacube.startree.meta;

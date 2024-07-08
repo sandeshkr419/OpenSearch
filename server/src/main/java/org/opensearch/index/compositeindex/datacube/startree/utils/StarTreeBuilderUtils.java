@@ -20,6 +20,7 @@ import java.util.Map;
 
 /**
  * Util class for building star tree
+ *
  * @opensearch.experimental
  */
 public class StarTreeBuilderUtils {
@@ -81,16 +82,16 @@ public class StarTreeBuilderUtils {
     }
 
     public static void serializeStarTreeMetadata(
-        IndexOutput dataOut,
+        IndexOutput metaOut,
         StarTreeField starTreeField,
         SegmentWriteState writeState,
         List<MetricAggregatorInfo> metricAggregatorInfos,
         Integer segmentAggregatedCount,
-        Integer dataFilePointer,
-        Integer dataFileLength
+        long dataFilePointer,
+        long dataFileLength
     ) throws IOException {
         StarTreeMetaSerializer.serializeStarTreeMetadata(
-            dataOut,
+            metaOut,
             CompositeMappedFieldType.CompositeFieldType.STAR_TREE,
             starTreeField,
             writeState,

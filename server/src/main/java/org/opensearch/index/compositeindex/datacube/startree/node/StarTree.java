@@ -7,18 +7,17 @@
  */
 package org.opensearch.index.compositeindex.datacube.startree.node;
 
-import java.util.List;
-
-/** Interface for star tree */
+/**
+ * Interface for star-tree.
+ *
+ * @opensearch.experimental
+ */
 public interface StarTree {
 
-    /** Get the root node of the star tree. */
-    StarTreeNode getRoot();
-
     /**
-     * Get a list of all dimension names. The node dimension id is the index of the dimension name in
-     * this list.
+     * Fetches the root node of the star-tree.
+     * @return the root of the star-tree
      */
-    List<String> getDimensionNames();
+    StarTreeNode getRoot();
 
 }

@@ -24,10 +24,24 @@ import static org.opensearch.index.compositeindex.CompositeIndexConstants.VERSIO
 import static org.opensearch.index.compositeindex.datacube.startree.node.OffHeapStarTreeNode.SERIALIZABLE_DATA_SIZE_IN_BYTES;
 import static org.opensearch.index.compositeindex.datacube.startree.utils.StarTreeBuilderUtils.ALL;
 
+/**
+ * Utility class for serializing a star-tree data structure.
+ *
+ * @opensearch.experimental
+ */
 public class StarTreeDataSerializer {
 
     private static final Logger logger = LogManager.getLogger(StarTreeDataSerializer.class);
 
+    /**
+     * Serializes the star-tree data structure.
+     *
+     * @param indexOutput the IndexOutput to write the star-tree data
+     * @param rootNode    the root node of the star-tree
+     * @param numNodes    the total number of nodes in the star-tree
+     * @return the total size in bytes of the serialized star-tree data
+     * @throws IOException if an I/O error occurs while writing the star-tree data
+     */
     public static long serializeStarTree(IndexOutput indexOutput, StarTreeBuilderUtils.TreeNode rootNode, int numNodes) throws IOException {
         int headerSizeInBytes = computeStarTreeDataHeaderByteSize();
         long totalSizeInBytes = headerSizeInBytes + (long) numNodes * SERIALIZABLE_DATA_SIZE_IN_BYTES;
@@ -39,6 +53,11 @@ public class StarTreeDataSerializer {
         return totalSizeInBytes;
     }
 
+    /**
+     * Computes the byte size of the star-tree data header.
+     *
+     * @return the byte size of the star-tree data header
+     */
     private static int computeStarTreeDataHeaderByteSize() {
         // Magic marker (8), version (4)
         int headerSizeInBytes = 12;
@@ -48,12 +67,26 @@ public class StarTreeDataSerializer {
         return headerSizeInBytes;
     }
 
+    /**
+     * Writes the star-tree data header.
+     *
+     * @param output   the IndexOutput to write the header
+     * @param numNodes the total number of nodes in the star-tree
+     * @throws IOException if an I/O error occurs while writing the header
+     */
     private static void writeStarTreeHeader(IndexOutput output, int numNodes) throws IOException {
         output.writeLong(MAGIC_MARKER);
         output.writeInt(VERSION);
         output.writeInt(numNodes);
     }
 
+    /**
+     * Writes the star-tree nodes in a breadth-first order.
+     *
+     * @param output   the IndexOutput to write the nodes
+     * @param rootNode the root node of the star-tree
+     * @throws IOException if an I/O error occurs while writing the nodes
+     */
     private static void writeStarTreeNodes(IndexOutput output, StarTreeBuilderUtils.TreeNode rootNode) throws IOException {
         Queue<StarTreeBuilderUtils.TreeNode> queue = new LinkedList<>();
         queue.add(rootNode);
@@ -81,6 +114,15 @@ public class StarTreeDataSerializer {
         }
     }
 
+    /**
+     * Writes a single star-tree node
+     *
+     * @param output       the IndexOutput to write the node
+     * @param node         the star tree node to write
+     * @param firstChildId the ID of the first child node
+     * @param lastChildId  the ID of the last child node
+     * @throws IOException if an I/O error occurs while writing the node
+     */
     private static void writeStarTreeNode(IndexOutput output, StarTreeBuilderUtils.TreeNode node, int firstChildId, int lastChildId)
         throws IOException {
         output.writeInt(node.dimensionId);

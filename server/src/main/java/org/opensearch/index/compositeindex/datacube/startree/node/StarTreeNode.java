@@ -22,39 +22,91 @@ import java.util.Iterator;
 public interface StarTreeNode {
     long ALL = -1l;
 
-    /** Get the index of the dimension. */
+    /**
+     * Returns the dimension ID of the current star-tree node.
+     *
+     * @return the dimension ID
+     * @throws IOException if an I/O error occurs while reading the dimension ID
+     */
     int getDimensionId() throws IOException;
 
-    /** Get the value (dictionary id) of the dimension. */
+    /**
+     * Returns the dimension value of the current star-tree node.
+     *
+     * @return the dimension value
+     * @throws IOException if an I/O error occurs while reading the dimension value
+     */
     long getDimensionValue() throws IOException;
 
-    /** Get the child dimension id. */
+    /**
+     * Returns the dimension ID of the child star-tree node.
+     *
+     * @return the child dimension ID
+     * @throws IOException if an I/O error occurs while reading the child dimension ID
+     */
     int getChildDimensionId() throws IOException;
 
-    /** Get the index of the start document. */
+    /**
+     * Returns the start document ID of the current star-tree node.
+     *
+     * @return the start document ID
+     * @throws IOException if an I/O error occurs while reading the start document ID
+     */
     int getStartDocId() throws IOException;
 
-    /** Get the index of the end document (exclusive). */
+    /**
+     * Returns the end document ID of the current star-tree node.
+     *
+     * @return the end document ID
+     * @throws IOException if an I/O error occurs while reading the end document ID
+     */
     int getEndDocId() throws IOException;
 
-    /** Get the index of the aggregated document. */
+    /**
+     * Returns the aggregated document ID of the current star-tree node.
+     *
+     * @return the aggregated document ID
+     * @throws IOException if an I/O error occurs while reading the aggregated document ID
+     */
     int getAggregatedDocId() throws IOException;
 
-    /** Get the number of children nodes. */
+    /**
+     * Returns the number of children of the current star-tree node.
+     *
+     * @return the number of children
+     * @throws IOException if an I/O error occurs while reading the number of children
+     */
     int getNumChildren() throws IOException;
 
-    /** Return true if the node is a leaf node, false otherwise. */
+    /**
+     * Checks if the current node is a leaf star-tree node.
+     *
+     * @return true if the node is a leaf node, false otherwise
+     */
     boolean isLeaf();
 
-    /** Return true if the node is a star node, false otherwise. */
+    /**
+     * Checks if the current node is a star node.
+     *
+     * @return true if the node is a star node, false otherwise
+     * @throws IOException if an I/O error occurs while reading the star node status
+     */
     boolean isStarNode() throws IOException;
 
     /**
-     * Get the child node corresponding to the given dimension value (dictionary id), or null if such
-     * child does not exist.
+     * Returns the child star-tree node for the given dimension value.
+     *
+     * @param dimensionValue the dimension value
+     * @return the child node for the given dimension value or null if child is not present
+     * @throws IOException if an I/O error occurs while retrieving the child node
      */
     StarTreeNode getChildForDimensionValue(long dimensionValue) throws IOException;
 
-    /** Get the iterator over all children nodes. */
+    /**
+     * Returns an iterator over the children of the current star-tree node.
+     *
+     * @return an iterator over the children
+     * @throws IOException if an I/O error occurs while retrieving the children iterator
+     */
     Iterator<? extends StarTreeNode> getChildrenIterator() throws IOException;
 }

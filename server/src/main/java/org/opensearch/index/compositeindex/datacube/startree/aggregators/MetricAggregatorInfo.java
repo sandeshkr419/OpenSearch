@@ -7,7 +7,6 @@
  */
 package org.opensearch.index.compositeindex.datacube.startree.aggregators;
 
-import org.opensearch.common.annotation.ExperimentalApi;
 import org.opensearch.index.compositeindex.datacube.MetricStat;
 import org.opensearch.index.compositeindex.datacube.startree.aggregators.numerictype.StarTreeNumericType;
 import org.opensearch.index.fielddata.IndexNumericFieldData;
@@ -17,6 +16,7 @@ import java.util.Objects;
 
 /**
  * Builds aggregation function and doc values field pair to support various aggregations
+ *
  * @opensearch.experimental
  */
 public class MetricAggregatorInfo implements Comparable<MetricAggregatorInfo> {

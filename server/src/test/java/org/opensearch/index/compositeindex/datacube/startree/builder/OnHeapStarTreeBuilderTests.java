@@ -13,6 +13,7 @@ import org.apache.lucene.codecs.lucene99.Lucene99Codec;
 import org.apache.lucene.index.DocValuesType;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.FieldInfos;
+import org.apache.lucene.index.IndexFileNames;
 import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.SegmentInfo;
 import org.apache.lucene.index.SegmentWriteState;
@@ -22,10 +23,12 @@ import org.apache.lucene.index.VectorSimilarityFunction;
 import org.apache.lucene.sandbox.document.HalfFloatPoint;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.store.IndexOutput;
 import org.apache.lucene.util.InfoStream;
 import org.apache.lucene.util.NumericUtils;
 import org.apache.lucene.util.Version;
 import org.opensearch.common.settings.Settings;
+import org.opensearch.index.codec.composite.Composite90DocValuesFormat;
 import org.opensearch.index.codec.composite.datacube.startree.StarTreeValues;
 import org.opensearch.index.compositeindex.datacube.Dimension;
 import org.opensearch.index.compositeindex.datacube.Metric;
@@ -80,6 +83,8 @@ public class OnHeapStarTreeBuilderTests extends OpenSearchTestCase {
     private StarTreeField compositeField;
     private Map<String, DocValuesProducer> fieldProducerMap;
     private SegmentWriteState writeState;
+    private IndexOutput dataOut;
+    private IndexOutput metaOut;
 
     @Before
     public void setup() throws IOException {
@@ -148,6 +153,20 @@ public class OnHeapStarTreeBuilderTests extends OpenSearchTestCase {
         FieldInfos fieldInfos = new FieldInfos(fieldsInfo);
         writeState = new SegmentWriteState(InfoStream.getDefault(), segmentInfo.dir, segmentInfo, fieldInfos, null, newIOContext(random()));
 
+        String dataFileName = IndexFileNames.segmentFileName(
+            writeState.segmentInfo.name,
+            writeState.segmentSuffix,
+            Composite90DocValuesFormat.DATA_EXTENSION
+        );
+        dataOut = writeState.directory.createOutput(dataFileName, writeState.context);
+
+        String metaFileName = IndexFileNames.segmentFileName(
+            writeState.segmentInfo.name,
+            writeState.segmentSuffix,
+            Composite90DocValuesFormat.META_EXTENSION
+        );
+        metaOut = writeState.directory.createOutput(metaFileName, writeState.context);
+
         mapperService = mock(MapperService.class);
         DocumentMapper documentMapper = mock(DocumentMapper.class);
         when(mapperService.documentMapper()).thenReturn(documentMapper);
@@ -170,7 +189,7 @@ public class OnHeapStarTreeBuilderTests extends OpenSearchTestCase {
             null
         );
         when(documentMapper.mappers()).thenReturn(fieldMappers);
-        builder = new OnHeapStarTreeBuilder(compositeField, writeState, mapperService);
+        builder = new OnHeapStarTreeBuilder(metaOut, dataOut, compositeField, writeState, mapperService);
     }
 
     public void test_sortAndAggregateStarTreeDocuments() throws IOException {
@@ -405,7 +424,7 @@ public class OnHeapStarTreeBuilderTests extends OpenSearchTestCase {
             null
         );
         when(documentMapper.mappers()).thenReturn(fieldMappers);
-        builder = new OnHeapStarTreeBuilder(compositeField, writeState, mapperService);
+        builder = new OnHeapStarTreeBuilder(metaOut, dataOut, compositeField, writeState, mapperService);
 
         int noOfStarTreeDocuments = 5;
         StarTreeDocument[] starTreeDocuments = new StarTreeDocument[noOfStarTreeDocuments];
@@ -500,7 +519,7 @@ public class OnHeapStarTreeBuilderTests extends OpenSearchTestCase {
             null
         );
         when(documentMapper.mappers()).thenReturn(fieldMappers);
-        builder = new OnHeapStarTreeBuilder(compositeField, writeState, mapperService);
+        builder = new OnHeapStarTreeBuilder(metaOut, dataOut, compositeField, writeState, mapperService);
 
         int noOfStarTreeDocuments = 5;
         StarTreeDocument[] starTreeDocuments = new StarTreeDocument[noOfStarTreeDocuments];
@@ -566,7 +585,7 @@ public class OnHeapStarTreeBuilderTests extends OpenSearchTestCase {
             null
         );
         when(documentMapper.mappers()).thenReturn(fieldMappers);
-        builder = new OnHeapStarTreeBuilder(compositeField, writeState, mapperService);
+        builder = new OnHeapStarTreeBuilder(metaOut, dataOut, compositeField, writeState, mapperService);
 
         int noOfStarTreeDocuments = 5;
         StarTreeDocument[] starTreeDocuments = new StarTreeDocument[noOfStarTreeDocuments];
@@ -699,8 +718,9 @@ public class OnHeapStarTreeBuilderTests extends OpenSearchTestCase {
         Map<String, DocIdSetIterator> f2dimDocIdSetIterators = Map.of("field1", f2d1sndv, "field3", f2d2sndv);
         Map<String, DocIdSetIterator> f2metricDocIdSetIterators = Map.of("field2", f2m1sndv);
         StarTreeValues starTreeValues2 = new StarTreeValues(sf, null, f2dimDocIdSetIterators, f2metricDocIdSetIterators);
-        OnHeapStarTreeBuilder builder = new OnHeapStarTreeBuilder(sf, writeState, mapperService);
+        OnHeapStarTreeBuilder builder = new OnHeapStarTreeBuilder(metaOut, dataOut, sf, writeState, mapperService);
         Iterator<StarTreeDocument> starTreeDocumentIterator = builder.mergeStarTrees(List.of(starTreeValues, starTreeValues2));
+
         /**
          * Asserting following dim / metrics [ dim1, dim2 / Sum [ metric] ]
          * [0, 0] | [0.0]
@@ -710,6 +730,7 @@ public class OnHeapStarTreeBuilderTests extends OpenSearchTestCase {
          * [5, 5] | [100.0]
          * [null, 2] | [40.0]
          */
+
         while (starTreeDocumentIterator.hasNext()) {
             StarTreeDocument starTreeDocument = starTreeDocumentIterator.next();
             assertEquals(
@@ -774,6 +795,8 @@ public class OnHeapStarTreeBuilderTests extends OpenSearchTestCase {
     @Override
     public void tearDown() throws Exception {
         super.tearDown();
+        dataOut.close();
+        metaOut.close();
         directory.close();
     }
 }

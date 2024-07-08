@@ -12,10 +12,10 @@ import org.apache.lucene.store.RandomAccessInput;
 import java.io.IOException;
 import java.util.Iterator;
 
-import static org.opensearch.index.compositeindex.datacube.startree.utils.StarTreeBuilderUtils.ALL;
-
 /**
  * Off heap implementation of {@link StarTreeNode}
+ *
+ * @opensearch.experimental
  */
 public class OffHeapStarTreeNode implements StarTreeNode {
     public static final int NUM_INT_SERIALIZABLE_FIELDS = 7;

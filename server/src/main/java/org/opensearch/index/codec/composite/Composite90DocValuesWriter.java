@@ -10,11 +10,15 @@ package org.opensearch.index.codec.composite;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.apache.lucene.codecs.CodecUtil;
 import org.apache.lucene.codecs.DocValuesConsumer;
 import org.apache.lucene.codecs.DocValuesProducer;
 import org.apache.lucene.index.FieldInfo;
+import org.apache.lucene.index.IndexFileNames;
 import org.apache.lucene.index.MergeState;
 import org.apache.lucene.index.SegmentWriteState;
+import org.apache.lucene.store.IndexOutput;
+import org.apache.lucene.util.IOUtils;
 import org.opensearch.common.annotation.ExperimentalApi;
 import org.opensearch.index.codec.composite.datacube.startree.StarTreeValues;
 import org.opensearch.index.compositeindex.datacube.startree.StarTreeField;
@@ -45,11 +49,51 @@ public class Composite90DocValuesWriter extends DocValuesConsumer {
     private final Set<CompositeMappedFieldType> compositeMappedFieldTypes;
     private final Set<String> compositeFieldSet;
 
+    public IndexOutput dataOut;
+    public IndexOutput metaOut;
+
     private final Map<String, DocValuesProducer> fieldProducerMap = new HashMap<>();
     private static final Logger logger = LogManager.getLogger(Composite90DocValuesWriter.class);
 
     public Composite90DocValuesWriter(DocValuesConsumer delegate, SegmentWriteState segmentWriteState, MapperService mapperService)
         throws IOException {
+
+        boolean success = false;
+        try {
+            String dataFileName = IndexFileNames.segmentFileName(
+                segmentWriteState.segmentInfo.name,
+                segmentWriteState.segmentSuffix,
+                Composite90DocValuesFormat.DATA_EXTENSION
+            );
+            dataOut = segmentWriteState.directory.createOutput(dataFileName, segmentWriteState.context);
+            CodecUtil.writeIndexHeader(
+                dataOut,
+                Composite90DocValuesFormat.DATA_CODEC_NAME,
+                Composite90DocValuesFormat.VERSION_CURRENT,
+                segmentWriteState.segmentInfo.getId(),
+                segmentWriteState.segmentSuffix
+            );
+
+            String metaFileName = IndexFileNames.segmentFileName(
+                segmentWriteState.segmentInfo.name,
+                segmentWriteState.segmentSuffix,
+                Composite90DocValuesFormat.META_EXTENSION
+            );
+            metaOut = segmentWriteState.directory.createOutput(metaFileName, segmentWriteState.context);
+            CodecUtil.writeIndexHeader(
+                metaOut,
+                Composite90DocValuesFormat.META_CODEC_NAME,
+                Composite90DocValuesFormat.VERSION_CURRENT,
+                segmentWriteState.segmentInfo.getId(),
+                segmentWriteState.segmentSuffix
+            );
+
+            success = true;
+        } finally {
+            if (success == false) {
+                IOUtils.closeWhileHandlingException(this);
+            }
+        }
 
         this.delegate = delegate;
         this.state = segmentWriteState;
@@ -93,6 +137,24 @@ public class Composite90DocValuesWriter extends DocValuesConsumer {
     @Override
     public void close() throws IOException {
         delegate.close();
+        boolean success = false;
+        try {
+            if (metaOut != null) {
+                metaOut.writeLong(-1); // write EOF marker
+                CodecUtil.writeFooter(metaOut); // write checksum
+            }
+            if (dataOut != null) {
+                CodecUtil.writeFooter(dataOut); // write checksum
+            }
+            success = true;
+        } finally {
+            if (success) {
+                IOUtils.close(dataOut, metaOut);
+            } else {
+                IOUtils.closeWhileHandlingException(dataOut, metaOut);
+            }
+            metaOut = dataOut = null;
+        }
     }
 
     private void createCompositeIndicesIfPossible(DocValuesProducer valuesProducer, FieldInfo field) throws IOException {
@@ -109,7 +171,7 @@ public class Composite90DocValuesWriter extends DocValuesConsumer {
                 }
             }
             StarTreesBuilder starTreesBuilder = new StarTreesBuilder(state, mapperService);
-            starTreesBuilder.build(fieldProducerMap);
+            starTreesBuilder.build(metaOut, dataOut, fieldProducerMap);
         }
     }
 
@@ -123,6 +185,7 @@ public class Composite90DocValuesWriter extends DocValuesConsumer {
 
     /**
      * Merges composite fields from multiple segments
+     *
      * @param mergeState merge state
      */
     private void mergeCompositeFields(MergeState mergeState) throws IOException {
@@ -131,6 +194,7 @@ public class Composite90DocValuesWriter extends DocValuesConsumer {
 
     /**
      * Merges star tree data fields from multiple segments
+     *
      * @param mergeState merge state
      */
     private void mergeStarTreeFields(MergeState mergeState) throws IOException {
@@ -169,6 +233,6 @@ public class Composite90DocValuesWriter extends DocValuesConsumer {
             }
         }
         final StarTreesBuilder starTreesBuilder = new StarTreesBuilder(state, mapperService);
-        starTreesBuilder.buildDuringMerge(starTreeFieldMap, starTreeSubsPerField);
+        starTreesBuilder.buildDuringMerge(metaOut, dataOut, starTreeFieldMap, starTreeSubsPerField);
     }
 }

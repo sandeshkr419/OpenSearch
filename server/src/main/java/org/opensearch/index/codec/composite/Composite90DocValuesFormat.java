@@ -37,6 +37,30 @@ public class Composite90DocValuesFormat extends DocValuesFormat {
     private final DocValuesFormat delegate;
     private final MapperService mapperService;
 
+    /** Data codec name for Composite Doc Values Format */
+    public static final String DATA_CODEC_NAME = "Composite90FormatData";
+
+    /** Meta codec name for Composite Doc Values Format */
+    public static final String META_CODEC_NAME = "Composite90FormatMeta";
+
+    /** Filename extension for the composite index data */
+    public static final String DATA_EXTENSION = "sttd";
+
+    /** Filename extension for the composite index meta */
+    public static final String META_EXTENSION = "sttm";
+
+    /** Filename extension for the composite index data doc values */
+    public static final String DATA_DOC_VALUES_EXTENSION = "sttddvm";
+
+    /** Filename extension for the composite index meta doc values */
+    public static final String META_DOC_VALUES_EXTENSION = "sttmdvm";
+
+    /** Initial version for the Composite90DocValuesFormat */
+    public static final int VERSION_START = 0;
+
+    /** Current version for the Composite90DocValuesFormat */
+    public static final int VERSION_CURRENT = VERSION_START;
+
     // needed for SPI
     public Composite90DocValuesFormat() {
         this(new Lucene90DocValuesFormat(), null);

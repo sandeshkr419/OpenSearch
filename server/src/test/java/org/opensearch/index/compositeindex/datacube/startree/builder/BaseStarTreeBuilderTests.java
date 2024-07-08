@@ -14,15 +14,18 @@ import org.apache.lucene.index.BaseStarTreeBuilder;
 import org.apache.lucene.index.DocValuesType;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.FieldInfos;
+import org.apache.lucene.index.IndexFileNames;
 import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.SegmentInfo;
 import org.apache.lucene.index.SegmentWriteState;
 import org.apache.lucene.index.VectorEncoding;
 import org.apache.lucene.index.VectorSimilarityFunction;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.store.IndexOutput;
 import org.apache.lucene.util.InfoStream;
 import org.apache.lucene.util.Version;
 import org.opensearch.common.settings.Settings;
+import org.opensearch.index.codec.composite.Composite90DocValuesFormat;
 import org.opensearch.index.codec.composite.datacube.startree.StarTreeValues;
 import org.opensearch.index.compositeindex.datacube.Dimension;
 import org.opensearch.index.compositeindex.datacube.Metric;
@@ -76,8 +79,11 @@ public class BaseStarTreeBuilderTests extends OpenSearchTestCase {
     private static List<Metric> metrics;
     private static Directory directory;
     private static FieldInfo[] fieldsInfo;
-    private static SegmentWriteState state;
+    private static SegmentWriteState writeState;
     private static StarTreeField starTreeField;
+
+    private static IndexOutput dataOut;
+    private static IndexOutput metaOut;
 
     @BeforeClass
     public static void setup() throws IOException {
@@ -139,7 +145,21 @@ public class BaseStarTreeBuilderTests extends OpenSearchTestCase {
             fieldProducerMap.put(fields.get(i), docValuesProducer);
         }
         FieldInfos fieldInfos = new FieldInfos(fieldsInfo);
-        state = new SegmentWriteState(InfoStream.getDefault(), segmentInfo.dir, segmentInfo, fieldInfos, null, newIOContext(random()));
+        writeState = new SegmentWriteState(InfoStream.getDefault(), segmentInfo.dir, segmentInfo, fieldInfos, null, newIOContext(random()));
+
+        String dataFileName = IndexFileNames.segmentFileName(
+            writeState.segmentInfo.name,
+            writeState.segmentSuffix,
+            Composite90DocValuesFormat.DATA_EXTENSION
+        );
+        dataOut = writeState.directory.createOutput(dataFileName, writeState.context);
+
+        String metaFileName = IndexFileNames.segmentFileName(
+            writeState.segmentInfo.name,
+            writeState.segmentSuffix,
+            Composite90DocValuesFormat.META_EXTENSION
+        );
+        metaOut = writeState.directory.createOutput(metaFileName, writeState.context);
 
         mapperService = mock(MapperService.class);
         DocumentMapper documentMapper = mock(DocumentMapper.class);
@@ -158,7 +178,7 @@ public class BaseStarTreeBuilderTests extends OpenSearchTestCase {
         );
         when(documentMapper.mappers()).thenReturn(fieldMappers);
 
-        builder = new BaseStarTreeBuilder(starTreeField, state, mapperService) {
+        builder = new BaseStarTreeBuilder(metaOut, dataOut, starTreeField, writeState, mapperService) {
             @Override
             public void build(List<StarTreeValues> starTreeValuesSubs) throws IOException {}
 
@@ -221,6 +241,8 @@ public class BaseStarTreeBuilderTests extends OpenSearchTestCase {
     @Override
     public void tearDown() throws Exception {
         super.tearDown();
+        dataOut.close();
+        metaOut.close();
         directory.close();
     }
 }

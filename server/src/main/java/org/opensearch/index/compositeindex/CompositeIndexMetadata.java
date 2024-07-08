@@ -16,19 +16,32 @@ import org.opensearch.index.compositeindex.datacube.startree.meta.StarTreeMetada
 import org.opensearch.index.mapper.CompositeMappedFieldType;
 
 import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
 
 import static org.opensearch.index.compositeindex.CompositeIndexConstants.MAGIC_MARKER;
 import static org.opensearch.index.compositeindex.CompositeIndexConstants.VERSION;
 
+/**
+ * This class represents the metadata of a Composite Index, which includes information about
+ * the composite field name, type, and the specific metadata for the type of composite field
+ * (e.g., StarTree metadata).
+ *
+ * @opensearch.experimental
+ */
 public class CompositeIndexMetadata {
 
     private static final Logger logger = LogManager.getLogger(CompositeIndexMetadata.class);
-    private final Map<String, StarTreeMetadata> starTreeMetadataMap = new HashMap<>();
+    private final String compositeFieldName;
+    private final CompositeMappedFieldType.CompositeFieldType compositeFieldType;
+    private final StarTreeMetadata starTreeMetadata;
 
-    public CompositeIndexMetadata(IndexInput meta) throws IOException {
-        long magicMarker = meta.readLong();
+    /**
+     * Constructs a CompositeIndexMetadata object from the provided IndexInput and magic marker.
+     *
+     * @param meta        the IndexInput containing the metadata
+     * @param magicMarker the magic marker value
+     * @throws IOException if an I/O error occurs while reading the metadata
+     */
+    public CompositeIndexMetadata(IndexInput meta, long magicMarker) throws IOException {
         if (MAGIC_MARKER != magicMarker) {
             logger.error("Invalid composite field magic marker");
             throw new IOException("Invalid composite field magic marker");
@@ -39,15 +52,13 @@ public class CompositeIndexMetadata {
             throw new IOException("Invalid composite field version");
         }
 
-        String compositeFieldName = meta.readString();
-        String compositeFieldType = meta.readString();
+        compositeFieldName = meta.readString();
+        compositeFieldType = CompositeMappedFieldType.CompositeFieldType.fromName(meta.readString());
 
-        CompositeMappedFieldType.CompositeFieldType fieldType = CompositeMappedFieldType.CompositeFieldType.fromName(compositeFieldType);
-
-        switch (fieldType) {
+        switch (compositeFieldType) {
             // support for type of composite fields can be added in the future.
             case STAR_TREE:
-                starTreeMetadataMap.put(compositeFieldName, new StarTreeMetadata(meta, compositeFieldName, compositeFieldType));
+                starTreeMetadata = new StarTreeMetadata(meta, compositeFieldName, compositeFieldType.getName());
                 break;
             default:
                 throw new CorruptIndexException("Invalid composite field type present in the file", meta);
@@ -55,7 +66,30 @@ public class CompositeIndexMetadata {
 
     }
 
-    public Map<String, StarTreeMetadata> getStarTreeMetadataMap() {
-        return starTreeMetadataMap;
+    /**
+     * Returns the star-tree metadata.
+     *
+     * @return the StarTreeMetadata
+     */
+    public StarTreeMetadata getStarTreeMetadata() {
+        return starTreeMetadata;
+    }
+
+    /**
+     * Returns the name of the composite field.
+     *
+     * @return the composite field name
+     */
+    public String getCompositeFieldName() {
+        return compositeFieldName;
+    }
+
+    /**
+     * Returns the type of the composite field.
+     *
+     * @return the composite field type
+     */
+    public CompositeMappedFieldType.CompositeFieldType getCompositeFieldType() {
+        return compositeFieldType;
     }
 }

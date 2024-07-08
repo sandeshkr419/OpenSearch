@@ -10,6 +10,11 @@ package org.opensearch.index.compositeindex.datacube.startree.aggregators;
 
 import org.opensearch.index.compositeindex.datacube.MetricStat;
 
+/**
+ * Holds the pair of metric name and it's associated stat
+ *
+ * @opensearch.experimental
+ */
 public class MetricEntry {
 
     private final String metricName;

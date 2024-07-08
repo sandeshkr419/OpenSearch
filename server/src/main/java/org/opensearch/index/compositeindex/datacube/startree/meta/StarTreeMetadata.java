@@ -13,14 +13,15 @@ import org.apache.lucene.index.CorruptIndexException;
 import org.apache.lucene.store.IndexInput;
 import org.opensearch.index.compositeindex.datacube.MetricStat;
 import org.opensearch.index.compositeindex.datacube.startree.aggregators.MetricEntry;
-import org.opensearch.index.compositeindex.datacube.startree.node.StarTreeNode;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Off heap implementation of {@link StarTreeNode}
+ * Holds the associated metadata for the building of star-tree
+ *
+ * @opensearch.experimental
  */
 public class StarTreeMetadata implements TreeMetadata {
     private static final Logger logger = LogManager.getLogger(TreeMetadata.class);
@@ -39,7 +40,7 @@ public class StarTreeMetadata implements TreeMetadata {
             this.starTreeFieldName = compositeFieldName;
             this.starTreeFieldType = compositeFieldType;
             this.dimensionOrdinals = readStarTreeDimensions();
-            this.metricEntries = readMetricPairs();
+            this.metricEntries = readMetricEntries();
             this.segmentAggregatedDocCount = readSegmentAggregatedDocCount();
             this.dataStartFilePointer = readDataStartFilePointer();
             this.dataLength = readDataLength();
@@ -72,7 +73,7 @@ public class StarTreeMetadata implements TreeMetadata {
     }
 
     @Override
-    public List<MetricEntry> readMetricPairs() throws IOException {
+    public List<MetricEntry> readMetricEntries() throws IOException {
         int metricCount = readMetricsCount();
         List<MetricEntry> metricEntries = new ArrayList<>();
 
@@ -100,30 +101,65 @@ public class StarTreeMetadata implements TreeMetadata {
         return meta.readLong();
     }
 
+    /**
+     * Returns the name of the star-tree field.
+     *
+     * @return star-tree field name
+     */
     public String getStarTreeFieldName() {
         return starTreeFieldName;
     }
 
+    /**
+     * Returns the type of the star tree field.
+     *
+     * @return star-tree field type
+     */
     public String getStarTreeFieldType() {
         return starTreeFieldType;
     }
 
+    /**
+     * Returns the list of dimension ordinals.
+     *
+     * @return star-tree dimension ordinals
+     */
     public List<Integer> getDimensionOrdinals() {
         return dimensionOrdinals;
     }
 
-    public List<MetricEntry> getMetricPairs() {
+    /**
+     * Returns the list of metric entries.
+     *
+     * @return star-tree metric entries
+     */
+    public List<MetricEntry> getMetricEntries() {
         return metricEntries;
     }
 
+    /**
+     * Returns the aggregated document count for the star-tree.
+     *
+     * @return the aggregated document count for the star-tree.
+     */
     public Integer getSegmentAggregatedDocCount() {
         return segmentAggregatedDocCount;
     }
 
+    /**
+     * Returns the file pointer to the start of the star-tree data.
+     *
+     * @return start file pointer for star-tree data
+     */
     public long getDataStartFilePointer() {
         return dataStartFilePointer;
     }
 
+    /**
+     * Returns the length of star-tree data
+     *
+     * @return star-tree length
+     */
     public long getDataLength() {
         return dataLength;
     }

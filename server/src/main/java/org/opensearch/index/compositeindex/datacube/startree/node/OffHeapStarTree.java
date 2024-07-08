@@ -14,19 +14,18 @@ import org.apache.lucene.store.RandomAccessInput;
 import org.opensearch.index.compositeindex.datacube.startree.meta.StarTreeMetadata;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
 
 import static org.opensearch.index.compositeindex.CompositeIndexConstants.MAGIC_MARKER;
 import static org.opensearch.index.compositeindex.CompositeIndexConstants.VERSION;
 
 /**
- * Off heap implementation of star tree.
+ * Off heap implementation of the star-tree.
+ *
+ * @opensearch.experimental
  */
 public class OffHeapStarTree implements StarTree {
     private static final Logger logger = LogManager.getLogger(OffHeapStarTree.class);
     private final OffHeapStarTreeNode root;
-    private final List<String> dimensionNames = new ArrayList<>();
     private final Integer numNodes;
 
     public OffHeapStarTree(IndexInput data, StarTreeMetadata starTreeMetadata) throws IOException {
@@ -42,7 +41,6 @@ public class OffHeapStarTree implements StarTree {
         }
         numNodes = data.readInt(); // num nodes
 
-        // should we get start and end file pointer from meta file?
         RandomAccessInput in = data.randomAccessSlice(
             starTreeMetadata.getDataStartFilePointer(),
             starTreeMetadata.getDataStartFilePointer() + starTreeMetadata.getDataLength()
@@ -55,11 +53,11 @@ public class OffHeapStarTree implements StarTree {
         return root;
     }
 
-    @Override
-    public List<String> getDimensionNames() {
-        return dimensionNames;
-    }
-
+    /**
+     * Returns the number of nodes in star-tree
+     *
+     * @return number of nodes in te star-tree
+     */
     public Integer getNumNodes() {
         return numNodes;
     }
