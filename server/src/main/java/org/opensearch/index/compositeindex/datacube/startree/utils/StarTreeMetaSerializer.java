@@ -100,7 +100,7 @@ public class StarTreeMetaSerializer {
         long totalMetricEntriesSize = 0;
 
         for (MetricAggregatorInfo metricAggregatorInfo : metricAggregatorInfos) {
-            totalMetricEntriesSize += metricAggregatorInfo.getMetric().getBytes(UTF_8).length;
+            totalMetricEntriesSize += metricAggregatorInfo.getField().getBytes(UTF_8).length;
             totalMetricEntriesSize += metricAggregatorInfo.getMetricStat().getTypeName().getBytes(UTF_8).length;
         }
 
@@ -189,7 +189,7 @@ public class StarTreeMetaSerializer {
 
         // metric - metric stat pair
         for (MetricAggregatorInfo metricAggregatorInfo : metricAggregatorInfos) {
-            String metricName = metricAggregatorInfo.getMetric();
+            String metricName = metricAggregatorInfo.getField();
             String metricStatName = metricAggregatorInfo.getMetricStat().getTypeName();
             metaOut.writeString(metricName);
             metaOut.writeString(metricStatName);
@@ -202,7 +202,7 @@ public class StarTreeMetaSerializer {
         metaOut.writeInt(starTreeField.getStarTreeConfig().maxLeafDocs());
 
         // number of skip star node creation dimensions
-        metaOut.writeInt(starTreeField.getStarTreeConfig().maxLeafDocs());
+        metaOut.writeInt(starTreeField.getStarTreeConfig().getSkipStarNodeCreationInDims().size());
 
         // skip star node creations
         for (String dimension : starTreeField.getStarTreeConfig().getSkipStarNodeCreationInDims()) {
