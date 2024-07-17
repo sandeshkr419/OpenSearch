@@ -102,6 +102,8 @@ import org.opensearch.search.aggregations.InternalAggregation.ReduceContext;
 import org.opensearch.search.aggregations.MultiBucketConsumerService;
 import org.opensearch.search.aggregations.SearchContextAggregations;
 import org.opensearch.search.aggregations.pipeline.PipelineAggregator.PipelineTree;
+import org.opensearch.search.aggregations.startree.StarTreeAggregator;
+import org.opensearch.search.aggregations.startree.StarTreeAggregatorFactory;
 import org.opensearch.search.builder.SearchSourceBuilder;
 import org.opensearch.search.collapse.CollapseContext;
 import org.opensearch.search.dfs.DfsPhase;
@@ -148,6 +150,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -1314,12 +1317,19 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
             context.evaluateRequestShouldUseConcurrentSearch();
             return;
         }
+
+        // Can be marked false for majority cases for which star-tree cannot be used
+        // Will save checking the criteria later and we can have a limit on what search requests are supported
+        // As we increment the cases where star-tree can be used, this can be set back to true
+        boolean canUseStarTree = context.mapperService().isCompositeIndexPresent();
+
         SearchShardTarget shardTarget = context.shardTarget();
         QueryShardContext queryShardContext = context.getQueryShardContext();
         context.from(source.from());
         context.size(source.size());
         Map<String, InnerHitContextBuilder> innerHitBuilders = new HashMap<>();
         if (source.query() != null) {
+            canUseStarTree = false;
             InnerHitContextBuilder.extractInnerHits(source.query(), innerHitBuilders);
             context.parsedQuery(queryShardContext.toQuery(source.query()));
         }
@@ -1496,6 +1506,39 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
         if (source.profile()) {
             context.setProfilers(new Profilers(context.searcher(), context.shouldUseConcurrentSearch()));
         }
+
+        if (canUseStarTree) {
+            try {
+                if (setStarTreeQuery(context, queryShardContext, source)) {
+                    logger.info("Star Tree will be used in execution");
+                };
+            } catch (IOException e) {
+                logger.info("Cannot use star-tree");
+            }
+
+        }
+    }
+
+    private boolean setStarTreeQuery(SearchContext context, QueryShardContext queryShardContext, SearchSourceBuilder source) throws IOException {
+
+        // TODO: (finish)
+        //  1. Check criteria for star-tree query / aggregation formation
+        //  2: Set StarTree Query & Star Tree Aggregator here
+
+        if (source.aggregations() == null) {
+            return false;
+        }
+
+        context.parsedQuery(queryShardContext.toStarTreeQuery(null, Set.of("sum_status")));
+
+        StarTreeAggregatorFactory factory = new StarTreeAggregatorFactory("sum_status", queryShardContext, null, null, null, List.of("status"), List.of("sum"));
+        StarTreeAggregatorFactory[] factories = {factory};
+        AggregatorFactories aggregatorFactories = new AggregatorFactories(factories);
+
+        context.aggregations(new SearchContextAggregations(aggregatorFactories, multiBucketConsumerService.create()));
+
+//        StarTreeAggregatorFactory factory = new StarTreeAggregatorFactory()
+        return true;
     }
 
     /**
