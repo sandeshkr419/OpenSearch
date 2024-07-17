@@ -249,13 +249,13 @@ public class AggregatorFactories {
         }
     };
 
-    private AggregatorFactory[] factories;
+    protected AggregatorFactory[] factories;
 
     public static Builder builder() {
         return new Builder();
     }
 
-    private AggregatorFactories(AggregatorFactory[] factories) {
+    public AggregatorFactories(AggregatorFactory[] factories) {
         this.factories = factories;
     }
 
@@ -660,5 +660,9 @@ public class AggregatorFactories {
                 .collect(toList());
             return new PipelineTree(subTrees, aggregators);
         }
+    }
+
+    public AggregatorFactory[] getFactories() {
+        return factories;
     }
 }

@@ -40,7 +40,12 @@ import org.opensearch.search.aggregations.CardinalityUpperBound;
 import org.opensearch.search.internal.SearchContext;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Base class for all values source agg factories
@@ -101,5 +106,13 @@ public abstract class ValuesSourceAggregatorFactory extends AggregatorFactory {
     @Override
     public String getStatsSubtype() {
         return config.valueSourceType().typeName();
+    }
+
+    public String getField() {
+        return config.fieldContext().field();
+    }
+
+    public String getAggregationName() {
+        return name;
     }
 }
