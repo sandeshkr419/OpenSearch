@@ -30,11 +30,13 @@ import org.opensearch.search.aggregations.Aggregator;
 import org.opensearch.search.aggregations.AggregatorFactories;
 import org.opensearch.search.aggregations.CardinalityUpperBound;
 import org.opensearch.search.aggregations.InternalAggregation;
+import org.opensearch.search.aggregations.InternalAggregations;
 import org.opensearch.search.aggregations.LeafBucketCollector;
 import org.opensearch.search.aggregations.LeafBucketCollectorBase;
 import org.opensearch.search.aggregations.bucket.BucketsAggregator;
 import org.opensearch.search.aggregations.bucket.SingleBucketAggregator;
 import org.opensearch.search.internal.SearchContext;
+import org.opensearch.search.query.OriginalOrStarTreeQuery;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -48,6 +50,7 @@ import static org.opensearch.core.xcontent.ConstructingObjectParser.optionalCons
 
 public class StarTreeAggregator extends BucketsAggregator implements SingleBucketAggregator {
 
+    BucketsAggregator originalAggregator;
     private Map<String, Double> sumMap = new HashMap<>();
     private Map<String, Integer> indexMap = new HashMap<>();
 
@@ -56,9 +59,11 @@ public class StarTreeAggregator extends BucketsAggregator implements SingleBucke
 
     String subAggregationName;
 
+
     private static final Logger logger = LogManager.getLogger(StarTreeAggregator.class);
 
     public StarTreeAggregator(
+        BucketsAggregator originalAggregator,
         String aggregationName,
         String subAggregationName,
         AggregatorFactories factories,
@@ -72,6 +77,7 @@ public class StarTreeAggregator extends BucketsAggregator implements SingleBucke
         this.fieldCols = fieldCols;
         this.metrics = metrics;
         this.subAggregationName = subAggregationName;
+        this.originalAggregator = originalAggregator;
     }
 
 //    public static class StarTree implements Writeable, ToXContentObject {
@@ -138,12 +144,10 @@ public class StarTreeAggregator extends BucketsAggregator implements SingleBucke
 
     @Override
     public InternalAggregation[] buildAggregations(long[] owningBucketOrds) throws IOException {
-
         return buildAggregationsForFixedBucketCount(
             owningBucketOrds,
             indexMap.size(),
             (offsetInOwningOrd, docCount, subAggregationResults) -> {
-                // TODO : make this better
                 String key = "";
                 for (Map.Entry<String, Integer> entry : indexMap.entrySet()) {
                     if (offsetInOwningOrd == entry.getValue()) {
@@ -165,13 +169,19 @@ public class StarTreeAggregator extends BucketsAggregator implements SingleBucke
 
     @Override
     public InternalAggregation buildEmptyAggregation() {
-        return new InternalStarTree(name, new ArrayList(), new HashMap<>());
+        return this.originalAggregator.buildEmptyAggregation();
+//        return new InternalStarTree(name, new ArrayList(), new HashMap<>());
     }
 
     @Override
     protected LeafBucketCollector getLeafCollector(LeafReaderContext ctx, LeafBucketCollector sub) throws IOException {
         //StarTreeAggregatedValues values = (StarTreeAggregatedValues) ctx.reader().getAggregatedDocValues();
         SegmentReader reader = Lucene.segmentReader(ctx.reader());
+
+        // override sub-aggregations
+        if (context.query() instanceof OriginalOrStarTreeQuery) {
+            int startreeUsed = ((OriginalOrStarTreeQuery)context.query()).getStarTreeQueryUsed();
+        }
 
         if(!(reader.getDocValuesReader() instanceof CompositeIndexReader)) return null;
         CompositeIndexReader starTreeDocValuesReader = (CompositeIndexReader) reader.getDocValuesReader();
@@ -211,6 +221,7 @@ public class StarTreeAggregator extends BucketsAggregator implements SingleBucke
                         sumMap.put(key, val);
                     }
                     collectBucket(sub, doc, subBucketOrdinal(bucket, indexMap.get(key)));
+//                    incrementBucketDocCount(bucket, 1);
                 }
             }
         };

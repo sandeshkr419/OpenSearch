@@ -13,6 +13,7 @@ import org.opensearch.search.aggregations.Aggregator;
 import org.opensearch.search.aggregations.AggregatorFactories;
 import org.opensearch.search.aggregations.AggregatorFactory;
 import org.opensearch.search.aggregations.CardinalityUpperBound;
+import org.opensearch.search.aggregations.bucket.terms.TermsAggregator;
 import org.opensearch.search.internal.SearchContext;
 
 import java.io.IOException;
@@ -23,6 +24,7 @@ public class StarTreeAggregatorFactory extends AggregatorFactory {
     private List<String> fieldCols;
     private List<String> metrics;
     String subAggregationName;
+    TermsAggregator originalAggregator;
 
     public StarTreeAggregatorFactory(
         String aggregationName,
@@ -47,11 +49,15 @@ public class StarTreeAggregatorFactory extends AggregatorFactory {
         CardinalityUpperBound cardinality,
         Map<String, Object> metadata
     ) throws IOException {
-        return new StarTreeAggregator(name, subAggregationName, factories, searchContext, parent, metadata, fieldCols, metrics);
+        return new StarTreeAggregator(this.originalAggregator, name, subAggregationName, factories, searchContext, parent, metadata, fieldCols, metrics);
     }
 
     @Override
     protected boolean supportsConcurrentSegmentSearch() {
         return true;
+    }
+
+    public void setOriginalAggregator(TermsAggregator aggregator) {
+        this.originalAggregator = aggregator;
     }
 }

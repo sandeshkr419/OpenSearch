@@ -35,14 +35,20 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
+
+import org.opensearch.common.annotation.ExperimentalApi;
 import org.opensearch.common.lucene.Lucene;
 import org.opensearch.index.codec.composite.CompositeIndexFieldInfo;
 import org.opensearch.index.codec.composite.CompositeIndexReader;
 import org.opensearch.index.codec.composite.datacube.startree.StarTreeValues;
 
 /** Query class for querying star tree data structure */
+@ExperimentalApi
 public class StarTreeQuery extends Query implements Accountable {
 
+
+    String fieldName;
+    // List of valid star trees
     Map<String, List<Predicate<Long>>> compositePredicateMap;
     Set<String> groupByColumns;
 
@@ -78,12 +84,15 @@ public class StarTreeQuery extends Query implements Accountable {
 
     @Override
     public Weight createWeight(IndexSearcher searcher, ScoreMode scoreMode, float boost) throws IOException {
+
+
         return new ConstantScoreWeight(this, boost) {
             @Override
             public Scorer scorer(LeafReaderContext context) throws IOException {
                 SegmentReader reader = Lucene.segmentReader(context.reader());
 
                 // We get the 'StarTreeReader' instance so that we can get StarTreeValues
+
 
                 if(!(reader.getDocValuesReader() instanceof CompositeIndexReader)) return null;
 

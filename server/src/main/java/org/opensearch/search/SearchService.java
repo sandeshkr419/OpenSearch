@@ -36,6 +36,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.lucene.search.FieldDoc;
 import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.Query;
 import org.apache.lucene.search.TopDocs;
 import org.opensearch.OpenSearchException;
 import org.opensearch.action.ActionRunnable;
@@ -116,6 +117,7 @@ import org.opensearch.search.aggregations.metrics.MetricsAggregator;
 import org.opensearch.search.aggregations.metrics.MinAggregatorFactory;
 import org.opensearch.search.aggregations.metrics.SumAggregatorFactory;
 import org.opensearch.search.aggregations.pipeline.PipelineAggregator.PipelineTree;
+import org.opensearch.search.aggregations.startree.OriginalOrStarTreeAggregatorFactory;
 import org.opensearch.search.aggregations.startree.StarTreeAggregator;
 import org.opensearch.search.aggregations.startree.StarTreeAggregatorFactory;
 import org.opensearch.search.aggregations.support.ValuesSourceAggregatorFactory;
@@ -142,10 +144,12 @@ import org.opensearch.search.internal.ShardSearchContextId;
 import org.opensearch.search.internal.ShardSearchRequest;
 import org.opensearch.search.lookup.SearchLookup;
 import org.opensearch.search.profile.Profilers;
+import org.opensearch.search.query.OriginalOrStarTreeQuery;
 import org.opensearch.search.query.QueryPhase;
 import org.opensearch.search.query.QuerySearchRequest;
 import org.opensearch.search.query.QuerySearchResult;
 import org.opensearch.search.query.ScrollQuerySearchResult;
+import org.opensearch.search.query.startree.StarTreeQuery;
 import org.opensearch.search.rescore.RescorerBuilder;
 import org.opensearch.search.searchafter.SearchAfterBuilder;
 import org.opensearch.search.sort.FieldSortBuilder;
@@ -1564,7 +1568,7 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
         }
 
         // TODO: Support for multiple startrees
-        CompositeDataCubeFieldType compositeMappedFieldType = (StarTreeMapper.StarTreeFieldType) context.mapperService().getCompositeFieldTypes().iterator().next();;
+        CompositeDataCubeFieldType compositeMappedFieldType = (StarTreeMapper.StarTreeFieldType) context.mapperService().getCompositeFieldTypes().iterator().next();
         List<String> supportedDimensions = new ArrayList<>(compositeMappedFieldType.fields());
         Map<String, List<MetricStat>> supportedMetrics = compositeMappedFieldType.getMetrics().stream()
             .collect(Collectors.toMap(Metric::getField, Metric::getMetrics));
@@ -1612,13 +1616,16 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
         }
         String metricKey = StarTreeHelper.fullFieldNameForStarTreeMetricsDocValues(compositeMappedFieldType.name(), field, metric.toLowerCase());
 
-        ParsedQuery query = queryShardContext.toStarTreeQuery(null, Set.of(dimension));
-
+        StarTreeQuery query = queryShardContext.toStarTreeQuery(null, Set.of(dimension));
+        AggregatorFactories originalFactories = source.aggregations().build(queryShardContext, null);
         StarTreeAggregatorFactory factory = new StarTreeAggregatorFactory(defaultFactory.name(), defaultSubFactory.name(), queryShardContext, null, AggregatorFactories.builder(), null, List.of(dimension), List.of(metricKey));
-        StarTreeAggregatorFactory[] factories = {factory};
+        OriginalOrStarTreeAggregatorFactory[] factories = { new OriginalOrStarTreeAggregatorFactory(defaultFactory.name(), queryShardContext, defaultFactory.getParent(), AggregatorFactories.builder(), null, List.of(factory), (TermsAggregatorFactory) originalFactories.getFactories()[0])};
         AggregatorFactories aggregatorFactories = new AggregatorFactories(factories);
 
-        context.parsedQuery(query)
+
+
+
+        context.parsedQuery(new ParsedQuery(new OriginalOrStarTreeQuery(List.of(query), context.query())))
             .aggregations(new SearchContextAggregations(aggregatorFactories, multiBucketConsumerService.create()));
 
         return true;

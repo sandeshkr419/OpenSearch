@@ -1188,10 +1188,10 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         );
     }
 
-    private Engine.IndexResult index(Engine engine, Engine.Index index) throws IOException {
+    private Engine.IndexResult index(Engine engine, final Engine.Index preindex) throws IOException {
         active.set(true);
         final Engine.IndexResult result;
-        index = indexingOperationListeners.preIndex(shardId, index);
+        final Engine.Index index = indexingOperationListeners.preIndex(shardId, preindex);
         try {
             if (logger.isTraceEnabled()) {
                 // don't use index.source().utf8ToString() here source might not be valid UTF-8

@@ -48,6 +48,7 @@ public class InternalStarTree<B extends InternalStarTree.Bucket,
         public Bucket(String key, double sum, InternalAggregations aggregations) {
             this.key = key;
             this.sum = sum;
+            this.docCount = 0;
             this.aggregations = aggregations;
         }
 

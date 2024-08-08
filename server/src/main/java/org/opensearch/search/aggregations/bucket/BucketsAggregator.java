@@ -126,7 +126,8 @@ public abstract class BucketsAggregator extends AggregatorBase {
             // the execution if we are running out. To achieve that we are passing 0 as a bucket count.
             multiBucketConsumer.accept(0);
         }
-        subCollector.collect(doc, bucketOrd);
+
+        .collect(doc, bucketOrd);
     }
 
     /**
