@@ -154,6 +154,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -1320,6 +1321,7 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
             context.evaluateRequestShouldUseConcurrentSearch();
             return;
         }
+
         // Can be marked false for majority cases for which star-tree cannot be used
         // Will save checking the criteria later and we can have a limit on what search requests are supported
         // As we increment the cases where star-tree can be used, this can be set back to true
@@ -1331,6 +1333,7 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
         context.size(source.size());
         Map<String, InnerHitContextBuilder> innerHitBuilders = new HashMap<>();
         if (source.query() != null) {
+            canUseStarTree = false;
             InnerHitContextBuilder.extractInnerHits(source.query(), innerHitBuilders);
             context.parsedQuery(queryShardContext.toQuery(source.query()));
         }
@@ -1518,7 +1521,6 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
 
     private boolean setStarTreeQuery(SearchContext context, QueryShardContext queryShardContext, SearchSourceBuilder source)
         throws IOException {
-
         if (source.aggregations() == null) {
             return false;
         }
@@ -1543,7 +1545,6 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
         if (queryShardContext.validateStarTreeMetricSuport(compositeMappedFieldType, aggregatorFactory)) {
             context.parsedQuery(parsedQuery);
         }
-
         return true;
     }
 

@@ -508,6 +508,12 @@ public class QueryShardContext extends QueryRewriteContext {
         return indexSortConfig.hasPrimarySortOnField(field);
     }
 
+    public ParsedQuery toStarTreeQuery(Map<String, List<Predicate<Long>>> compositePredicateMap,
+                                       Set<String> groupByColumns) {
+        StarTreeQuery starTreeQuery = new StarTreeQuery(compositePredicateMap, groupByColumns);
+        return new ParsedQuery(starTreeQuery);
+    }
+
     public ParsedQuery toQuery(QueryBuilder queryBuilder) {
         return toQuery(queryBuilder, q -> {
             Query query = q.toQuery(this);

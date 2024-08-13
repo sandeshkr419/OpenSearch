@@ -32,15 +32,39 @@
 
 package org.opensearch.search.aggregations.support;
 
+import org.apache.lucene.codecs.DocValuesFormat;
+import org.apache.lucene.codecs.lucene90.Lucene90DocValuesFormat;
+import org.apache.lucene.search.MatchAllDocsQuery;
+import org.opensearch.Build;
+import org.opensearch.common.xcontent.XContentHelper;
+import org.opensearch.common.xcontent.json.JsonXContent;
+import org.opensearch.core.common.bytes.BytesArray;
+import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.core.xcontent.MediaType;
+import org.opensearch.core.xcontent.MediaTypeRegistry;
+import org.opensearch.index.codec.composite.Composite90DocValuesFormat;
+import org.opensearch.index.codec.composite.Composite90DocValuesReader;
+import org.opensearch.index.codec.composite.CompositeIndexReader;
+import org.opensearch.index.compositeindex.datacube.MetricStat;
+import org.opensearch.index.mapper.CompositeDataCubeFieldType;
+import org.opensearch.index.mapper.CompositeMappedFieldType;
+import org.opensearch.index.mapper.StarTreeMapper;
 import org.opensearch.index.query.QueryShardContext;
 import org.opensearch.search.aggregations.Aggregator;
 import org.opensearch.search.aggregations.AggregatorFactories;
 import org.opensearch.search.aggregations.AggregatorFactory;
 import org.opensearch.search.aggregations.CardinalityUpperBound;
+import org.opensearch.search.aggregations.startree.StarTreeAggregator;
+import org.opensearch.search.builder.SearchSourceBuilder;
 import org.opensearch.search.internal.SearchContext;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Base class for all values source agg factories
@@ -72,6 +96,52 @@ public abstract class ValuesSourceAggregatorFactory extends AggregatorFactory {
     ) throws IOException {
         if (config.hasValues() == false) {
             return createUnmapped(searchContext, parent, metadata);
+        }
+
+        boolean starTreeIndexPresent = searchContext.mapperService().isCompositeIndexPresent();
+        // Try to see if the query can be resolved using star-tree index
+        if (starTreeIndexPresent) {
+            try {
+
+                CompositeDataCubeFieldType compositeMappedFieldTypes = (StarTreeMapper.StarTreeFieldType) searchContext.mapperService().getCompositeFieldTypes().iterator().next();
+
+                // TODO: Add support for different query types
+//                assert (searchContext.query() instanceof MatchAllDocsQuery);
+
+                // single composite index supported as of now
+                // will need to iterate over different composite indices once multiple composite indices are supported
+                List<String> supportedFields = new ArrayList<>(compositeMappedFieldTypes.fields());
+                List<MetricStat> supportedMetrics = compositeMappedFieldTypes.getMetrics().get(0).getMetrics();
+
+                AggregatorFactories.Builder sourceBuilder = searchContext.request().source().aggregations();
+                BytesReference br = new BytesArray(sourceBuilder.toString());
+                Map<String, Object> jsonXContent = XContentHelper.convertToMap(br, false, MediaTypeRegistry.JSON).v2();
+                if (jsonXContent.containsKey("aggregations")) {
+                    // TODO: Add support for nested aggregations
+                    throw new UnsupportedOperationException(" Nested Aggregations not supported");
+                }
+
+                Map.Entry<String, Object> metric = ((Map<String, Object>) jsonXContent.get(name)).entrySet().iterator().next();
+                if (supportedMetrics.contains(MetricStat.fromTypeName(metric.getKey())) == false) {
+                    throw new UnsupportedOperationException("Aggregation type not supported from star-tree: " + metric.getKey());
+                }
+
+                String queryField = ((Map<String, String>) metric.getValue()).get("field").toString();
+                assert (supportedFields.contains(queryField));
+                // TODO: create a star tree query and then invoke aggregator
+
+
+
+//                CompositeIndexReader indexReader = new Composite90DocValuesReader()
+                StarTreeAggregator starTreeAggregator = new StarTreeAggregator(name, factories, null, null, searchContext, parent, metadata, List.of(queryField), List.of(metric.getKey()));
+                return starTreeAggregator;
+
+
+            } catch (Exception e) {
+                // Ignore
+                System.out.println("Cannot use star tree index");
+
+            }
         }
         return doCreateInternal(searchContext, parent, cardinality, metadata);
     }
