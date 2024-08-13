@@ -36,6 +36,8 @@ import org.apache.lucene.search.ScoreMode;
 import org.opensearch.common.lease.Releasables;
 import org.opensearch.common.util.BigArrays;
 import org.opensearch.common.util.DoubleArray;
+import org.opensearch.index.codec.composite.CompositeIndexFieldInfo;
+import org.opensearch.index.codec.composite.datacube.startree.StarTreeValues;
 import org.opensearch.index.fielddata.SortedNumericDoubleValues;
 import org.opensearch.search.DocValueFormat;
 import org.opensearch.search.aggregations.Aggregator;
@@ -45,6 +47,8 @@ import org.opensearch.search.aggregations.LeafBucketCollectorBase;
 import org.opensearch.search.aggregations.support.ValuesSource;
 import org.opensearch.search.aggregations.support.ValuesSourceConfig;
 import org.opensearch.search.internal.SearchContext;
+import org.opensearch.search.startree.OriginalOrStarTreeQuery;
+import org.opensearch.search.startree.StarTreeQuery;
 
 import java.io.IOException;
 import java.util.Map;
@@ -56,13 +60,13 @@ import java.util.Map;
  */
 public class SumAggregator extends NumericMetricsAggregator.SingleValue {
 
-    private final ValuesSource.Numeric valuesSource;
-    private final DocValueFormat format;
+    protected final ValuesSource.Numeric valuesSource;
+    protected final DocValueFormat format;
 
-    private DoubleArray sums;
-    private DoubleArray compensations;
+    protected DoubleArray sums;
+    protected DoubleArray compensations;
 
-    SumAggregator(
+    public SumAggregator(
         String name,
         ValuesSourceConfig valuesSourceConfig,
         SearchContext context,
@@ -86,6 +90,14 @@ public class SumAggregator extends NumericMetricsAggregator.SingleValue {
 
     @Override
     public LeafBucketCollector getLeafCollector(LeafReaderContext ctx, final LeafBucketCollector sub) throws IOException {
+        if (context.query() instanceof OriginalOrStarTreeQuery && ((OriginalOrStarTreeQuery) context.query()).isStarTreeUsed()) {
+            StarTreeQuery starTreeQuery = ((OriginalOrStarTreeQuery) context.query()).getStarTreeQuery();
+            return getStarTreeLeafCollector(ctx, sub, starTreeQuery.getStarTree());
+        }
+        return getDefaultLeafCollector(ctx, sub);
+    }
+
+    private LeafBucketCollector getDefaultLeafCollector(LeafReaderContext ctx, LeafBucketCollector sub) throws IOException {
         if (valuesSource == null) {
             return LeafBucketCollector.NO_OP_COLLECTOR;
         }
@@ -114,6 +126,28 @@ public class SumAggregator extends NumericMetricsAggregator.SingleValue {
                     compensations.set(bucket, kahanSummation.delta());
                     sums.set(bucket, kahanSummation.value());
                 }
+            }
+        };
+    }
+
+    private LeafBucketCollector getStarTreeLeafCollector(LeafReaderContext ctx, LeafBucketCollector sub, CompositeIndexFieldInfo starTree)
+        throws IOException {
+        final BigArrays bigArrays = context.bigArrays();
+        final CompensatedSum kahanSummation = new CompensatedSum(0, 0);
+
+        StarTreeValues starTreeValues = getStarTreeValues(ctx, starTree);
+
+        //
+        String fieldName = ((ValuesSource.Numeric.FieldData) valuesSource).getIndexFieldName();
+
+        return new LeafBucketCollectorBase(sub, starTreeValues) {
+            @Override
+            public void collect(int doc, long bucket) throws IOException {
+                // TODO: Fix the response for collecting star tree sum
+                sums = bigArrays.grow(sums, bucket + 1);
+                compensations = bigArrays.grow(compensations, bucket + 1);
+                compensations.set(bucket, kahanSummation.delta());
+                sums.set(bucket, kahanSummation.value());
             }
         };
     }

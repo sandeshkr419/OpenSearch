@@ -56,7 +56,11 @@ import org.opensearch.index.IndexSettings;
 import org.opensearch.index.IndexSortConfig;
 import org.opensearch.index.analysis.IndexAnalyzers;
 import org.opensearch.index.cache.bitset.BitsetFilterCache;
+import org.opensearch.index.codec.composite.CompositeIndexFieldInfo;
+import org.opensearch.index.compositeindex.datacube.Metric;
+import org.opensearch.index.compositeindex.datacube.MetricStat;
 import org.opensearch.index.fielddata.IndexFieldData;
+import org.opensearch.index.mapper.CompositeDataCubeFieldType;
 import org.opensearch.index.mapper.ContentPath;
 import org.opensearch.index.mapper.DerivedFieldResolver;
 import org.opensearch.index.mapper.DerivedFieldResolverFactory;
@@ -73,12 +77,17 @@ import org.opensearch.script.Script;
 import org.opensearch.script.ScriptContext;
 import org.opensearch.script.ScriptFactory;
 import org.opensearch.script.ScriptService;
+import org.opensearch.search.aggregations.AggregatorFactory;
+import org.opensearch.search.aggregations.metrics.SumAggregatorFactory;
 import org.opensearch.search.aggregations.support.AggregationUsageService;
 import org.opensearch.search.aggregations.support.ValuesSourceRegistry;
 import org.opensearch.search.lookup.SearchLookup;
+import org.opensearch.search.startree.OriginalOrStarTreeQuery;
+import org.opensearch.search.startree.StarTreeQuery;
 import org.opensearch.transport.RemoteClusterAware;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -89,6 +98,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import static java.util.Collections.emptyList;
 import static java.util.Collections.emptyMap;
@@ -520,6 +530,66 @@ public class QueryShardContext extends QueryRewriteContext {
         } finally {
             reset();
         }
+    }
+
+    public ParsedQuery toStarTreeQuery(CompositeIndexFieldInfo starTree, QueryBuilder queryBuilder, Query query) {
+        Map<String, List<Predicate<Long>>> predicateMap = getStarTreePredicates(queryBuilder);
+        StarTreeQuery starTreeQuery = new StarTreeQuery(starTree, predicateMap, null);
+        OriginalOrStarTreeQuery originalOrStarTreeQuery = new OriginalOrStarTreeQuery(starTreeQuery, query);
+        return new ParsedQuery(originalOrStarTreeQuery);
+    }
+
+    /**
+     * Parse query body to star-tree predicates
+     * @param queryBuilder
+     * @return
+     */
+    private Map<String, List<Predicate<Long>>> getStarTreePredicates(QueryBuilder queryBuilder) {
+        // Assuming the following variables have been initialized:
+        Map<String, List<Predicate<Long>>> predicateMap = new HashMap<>();
+
+        // Check if the query builder is an instance of TermQueryBuilder
+        if (queryBuilder instanceof TermQueryBuilder) {
+            TermQueryBuilder tq = (TermQueryBuilder) queryBuilder;
+            String field = tq.fieldName();
+            long inputQueryVal = Long.parseLong(tq.value().toString());
+
+            // Get or create the list of predicates for the given field
+            List<Predicate<Long>> predicates = predicateMap.getOrDefault(field, new ArrayList<>());
+
+            // Create a predicate to match the input query value
+            Predicate<Long> predicate = dimVal -> dimVal == inputQueryVal;
+            predicates.add(predicate);
+
+            // Put the predicates list back into the map
+            predicateMap.put(field, predicates);
+        } else {
+            throw new IllegalArgumentException("The query is not a term query");
+        }
+        return predicateMap;
+
+    }
+
+    public boolean validateStarTreeMetricSuport(CompositeDataCubeFieldType compositeIndexFieldInfo, AggregatorFactory aggregatorFactory) {
+        String field = null;
+        Map<String, List<MetricStat>> supportedMetrics = compositeIndexFieldInfo.getMetrics()
+            .stream()
+            .collect(Collectors.toMap(Metric::getField, Metric::getMetrics));
+
+        // Existing support only for MetricAggregators without sub-aggregations
+        if (aggregatorFactory.getSubFactories().getFactories().length != 0) {
+            return false;
+        }
+
+        // TODO: increment supported aggregation type
+        if (aggregatorFactory instanceof SumAggregatorFactory) {
+            field = ((SumAggregatorFactory) aggregatorFactory).getField();
+            if (supportedMetrics.containsKey(field) && supportedMetrics.get(field).contains(MetricStat.SUM)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public Index index() {
