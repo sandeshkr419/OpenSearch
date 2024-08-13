@@ -1545,6 +1545,10 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
         if (queryShardContext.validateStarTreeMetricSuport(compositeMappedFieldType, aggregatorFactory)) {
             context.parsedQuery(parsedQuery);
         }
+<<<<<<< HEAD
+=======
+
+>>>>>>> da0056b688c (Star stree request/response changes)
         return true;
     }
 
