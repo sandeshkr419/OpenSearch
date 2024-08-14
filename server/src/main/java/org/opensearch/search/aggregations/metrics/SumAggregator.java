@@ -32,12 +32,14 @@
 package org.opensearch.search.aggregations.metrics;
 
 import org.apache.lucene.index.LeafReaderContext;
+import org.apache.lucene.index.SortedNumericDocValues;
 import org.apache.lucene.search.ScoreMode;
 import org.opensearch.common.lease.Releasables;
 import org.opensearch.common.util.BigArrays;
 import org.opensearch.common.util.DoubleArray;
 import org.opensearch.index.codec.composite.CompositeIndexFieldInfo;
 import org.opensearch.index.codec.composite.datacube.startree.StarTreeValues;
+import org.opensearch.index.compositeindex.datacube.startree.utils.StarTreeHelper;
 import org.opensearch.index.fielddata.SortedNumericDoubleValues;
 import org.opensearch.search.DocValueFormat;
 import org.opensearch.search.aggregations.Aggregator;
@@ -137,8 +139,9 @@ public class SumAggregator extends NumericMetricsAggregator.SingleValue {
 
         StarTreeValues starTreeValues = getStarTreeValues(ctx, starTree);
 
-        //
         String fieldName = ((ValuesSource.Numeric.FieldData) valuesSource).getIndexFieldName();
+        String metricName = StarTreeHelper.fullFieldNameForStarTreeMetricsDocValues(starTree.getField(), fieldName, "sum");
+
 
         return new LeafBucketCollectorBase(sub, starTreeValues) {
             @Override
@@ -147,7 +150,23 @@ public class SumAggregator extends NumericMetricsAggregator.SingleValue {
                 sums = bigArrays.grow(sums, bucket + 1);
                 compensations = bigArrays.grow(compensations, bucket + 1);
                 compensations.set(bucket, kahanSummation.delta());
-                sums.set(bucket, kahanSummation.value());
+
+                SortedNumericDocValues dv = (SortedNumericDocValues) starTreeValues.getMetricDocValuesIteratorMap().get(metricName);
+
+                if (dv.advanceExact(doc)) {
+                    final int valuesCount = dv.docValueCount();
+                    double sum = sums.get(bucket);
+                    double compensation = compensations.get(bucket);
+                    kahanSummation.reset(sum, compensation);
+
+                    for (int i = 0; i < valuesCount; i++) {
+                        double value = Double.longBitsToDouble(dv.nextValue());
+                        kahanSummation.add(value);
+                    }
+
+                    compensations.set(bucket, kahanSummation.delta());
+                    sums.set(bucket, kahanSummation.value());
+                }
             }
         };
     }
