@@ -32,6 +32,8 @@ import org.opensearch.index.query.TermQueryBuilder;
 import org.opensearch.search.aggregations.AggregatorFactory;
 import org.opensearch.search.aggregations.LeafBucketCollector;
 import org.opensearch.search.aggregations.bucket.histogram.DateHistogramAggregatorFactory;
+import org.opensearch.search.aggregations.bucket.terms.TermsAggregator;
+import org.opensearch.search.aggregations.bucket.terms.TermsAggregatorFactory;
 import org.opensearch.search.aggregations.metrics.MetricAggregatorFactory;
 import org.opensearch.search.aggregations.support.ValuesSource;
 import org.opensearch.search.builder.SearchSourceBuilder;
@@ -85,6 +87,10 @@ public class StarTreeQueryHelper {
 
             // if not a metric aggregation, check for applicable date histogram shape
             if (validateDateHistogramSupport(compositeMappedFieldType, aggregatorFactory)) {
+                continue;
+            }
+
+            if (aggregatorFactory instanceof TermsAggregatorFactory) {
                 continue;
             }
             return null;
@@ -172,8 +178,8 @@ public class StarTreeQueryHelper {
         AggregatorFactory aggregatorFactory
     ) {
         if ((aggregatorFactory instanceof DateHistogramAggregatorFactory) == false
-            && aggregatorFactory.getSubFactories().getFactories().length != 1
-            && (compositeIndexFieldInfo.getDimensions().get(0) instanceof DateDimension) == false) {
+            || aggregatorFactory.getSubFactories().getFactories().length != 1
+            || (compositeIndexFieldInfo.getDimensions().get(0) instanceof DateDimension) == false) {
             return false;
         }
 

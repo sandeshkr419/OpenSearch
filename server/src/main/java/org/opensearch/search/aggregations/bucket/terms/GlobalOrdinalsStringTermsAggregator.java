@@ -41,9 +41,11 @@ import org.apache.lucene.index.SortedSetDocValues;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.search.CollectionTerminatedException;
+import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.search.Weight;
 import org.apache.lucene.util.ArrayUtil;
 import org.apache.lucene.util.BytesRef;
+import org.apache.lucene.util.FixedBitSet;
 import org.apache.lucene.util.PriorityQueue;
 import org.opensearch.common.SetOnce;
 import org.opensearch.common.lease.Releasable;
@@ -52,6 +54,11 @@ import org.opensearch.common.util.LongArray;
 import org.opensearch.common.util.LongHash;
 import org.opensearch.core.common.io.stream.StreamOutput;
 import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.index.codec.composite.CompositeIndexFieldInfo;
+import org.opensearch.index.compositeindex.datacube.MetricStat;
+import org.opensearch.index.compositeindex.datacube.startree.utils.StarTreeUtils;
+import org.opensearch.index.compositeindex.datacube.startree.utils.iterator.SortedNumericStarTreeValuesIterator;
+import org.opensearch.index.compositeindex.datacube.startree.utils.iterator.SortedSetStarTreeValuesIterator;
 import org.opensearch.index.mapper.DocCountFieldMapper;
 import org.opensearch.search.DocValueFormat;
 import org.opensearch.search.aggregations.AggregationExecutionException;
@@ -64,11 +71,14 @@ import org.opensearch.search.aggregations.InternalMultiBucketAggregation;
 import org.opensearch.search.aggregations.InternalOrder;
 import org.opensearch.search.aggregations.LeafBucketCollector;
 import org.opensearch.search.aggregations.LeafBucketCollectorBase;
+import org.opensearch.search.aggregations.StarTreeBucketCollector;
+import org.opensearch.search.aggregations.StarTreePreComputeCollector;
 import org.opensearch.search.aggregations.bucket.LocalBucketCountThresholds;
 import org.opensearch.search.aggregations.bucket.terms.SignificanceLookup.BackgroundFrequencyForBytes;
 import org.opensearch.search.aggregations.bucket.terms.heuristic.SignificanceHeuristic;
 import org.opensearch.search.aggregations.support.ValuesSource;
 import org.opensearch.search.internal.SearchContext;
+import org.opensearch.search.startree.StarTreeFilter;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -78,6 +88,8 @@ import java.util.function.Function;
 import java.util.function.LongPredicate;
 import java.util.function.LongUnaryOperator;
 
+import static org.opensearch.index.compositeindex.datacube.startree.utils.StarTreeQueryHelper.getStarTreeValues;
+import static org.opensearch.index.compositeindex.datacube.startree.utils.StarTreeQueryHelper.getSupportedStarTree;
 import static org.opensearch.search.aggregations.InternalOrder.isKeyOrder;
 import static org.apache.lucene.index.SortedSetDocValues.NO_MORE_ORDS;
 import static org.apache.lucene.search.DocIdSetIterator.NO_MORE_DOCS;
@@ -87,7 +99,7 @@ import static org.apache.lucene.search.DocIdSetIterator.NO_MORE_DOCS;
  *
  * @opensearch.internal
  */
-public class GlobalOrdinalsStringTermsAggregator extends AbstractStringTermsAggregator {
+public class GlobalOrdinalsStringTermsAggregator extends AbstractStringTermsAggregator implements StarTreePreComputeCollector {
     protected final ResultStrategy<?, ?, ?> resultStrategy;
     protected final ValuesSource.Bytes.WithOrdinals valuesSource;
 
@@ -99,6 +111,7 @@ public class GlobalOrdinalsStringTermsAggregator extends AbstractStringTermsAggr
     private final SetOnce<SortedSetDocValues> dvs = new SetOnce<>();
     protected int segmentsWithSingleValuedOrds = 0;
     protected int segmentsWithMultiValuedOrds = 0;
+    LongUnaryOperator globalOperator;
 
     /**
      * Lookup global ordinals
@@ -230,6 +243,14 @@ public class GlobalOrdinalsStringTermsAggregator extends AbstractStringTermsAggr
     public LeafBucketCollector getLeafCollector(LeafReaderContext ctx, LeafBucketCollector sub) throws IOException {
         SortedSetDocValues globalOrds = valuesSource.globalOrdinalsValues(ctx);
         collectionStrategy.globalOrdsReady(globalOrds);
+        globalOperator = valuesSource.globalOrdinalsMapping(ctx);
+
+        CompositeIndexFieldInfo supportedStarTree = getSupportedStarTree(this.context);
+        if (supportedStarTree != null) {
+            if (preComputeWithStarTree(ctx, supportedStarTree) == true) {
+                return LeafBucketCollector.NO_OP_COLLECTOR;
+            }
+        }
 
         if (collectionStrategy instanceof DenseGlobalOrds
             && this.resultStrategy instanceof StandardTermsResults
@@ -310,6 +331,78 @@ public class GlobalOrdinalsStringTermsAggregator extends AbstractStringTermsAggr
             }
         });
     }
+
+    @Override
+    public StarTreeBucketCollector getStarTreeBucketCollector(LeafReaderContext ctx, CompositeIndexFieldInfo starTree) throws IOException {
+        return new StarTreeBucketCollector() {
+            {
+                this.starTreeValues = getStarTreeValues(ctx, starTree);
+                this.matchingDocsBitSet = StarTreeFilter.getPredicateValueToFixedBitSetMap(starTreeValues, fieldName);
+                this.setSubCollectors();
+            }
+
+            public void setSubCollectors() throws IOException {
+                for (Aggregator aggregator : subAggregators) {
+                    this.subCollectors.add(((StarTreePreComputeCollector) aggregator).getStarTreeBucketCollector(ctx, starTree));
+                }
+            }
+
+            // TODO: fetch dimension name
+            SortedSetStarTreeValuesIterator valuesIterator = (SortedSetStarTreeValuesIterator) starTreeValues
+                    .getDimensionValuesIterator("verb");
+
+            String metricName = StarTreeUtils.fullyQualifiedFieldNameForStarTreeMetricsDocValues(
+                    starTree.getField(),
+                    "_doc_count",
+                    MetricStat.DOC_COUNT.getTypeName()
+            );
+            SortedNumericStarTreeValuesIterator metricValuesIterator = (SortedNumericStarTreeValuesIterator) starTreeValues
+                    .getMetricValuesIterator(metricName);
+
+            @Override
+            public void collectStarTreeEntry(int starTreeEntry, long owningBucketOrd) throws IOException {
+
+                if (valuesIterator.advance(starTreeEntry) == NO_MORE_DOCS) {
+                    return;
+                }
+
+                for (int i = 0, count = valuesIterator.docValueCount(); i < count; i++) {
+                    long dimensionValue = valuesIterator.nextOrd();
+                    long ord = globalOperator.applyAsLong(dimensionValue);
+
+                    if (metricValuesIterator.advanceExact(starTreeEntry)) {
+                        long metricValue = metricValuesIterator.nextValue();
+
+                        long bucketOrd = collectionStrategy.globalOrdToBucketOrd(0, ord);
+                        if (bucketOrd < 0) {
+                            bucketOrd = -1 - bucketOrd;
+                            collectStarTreeBucket(this, metricValue, bucketOrd, starTreeEntry);
+                        } else {
+                            grow(bucketOrd + 1);
+                            collectStarTreeBucket(this, metricValue, bucketOrd, starTreeEntry);
+                        }
+                    }
+                }
+            }
+        };
+    }
+
+    private boolean preComputeWithStarTree(LeafReaderContext ctx, CompositeIndexFieldInfo supportedStarTree) throws IOException {
+        StarTreeBucketCollector starTreeBucketCollector = getStarTreeBucketCollector(ctx, supportedStarTree);
+        FixedBitSet matchingDocsBitSet = starTreeBucketCollector.getMatchingDocsBitSet();
+
+        int numBits = matchingDocsBitSet.length();
+
+        if (numBits > 0) {
+            for (int bit = matchingDocsBitSet.nextSetBit(0); bit != DocIdSetIterator.NO_MORE_DOCS; bit = (bit + 1 < numBits)
+                    ? matchingDocsBitSet.nextSetBit(bit + 1)
+                    : DocIdSetIterator.NO_MORE_DOCS) {
+                starTreeBucketCollector.collectStarTreeEntry(bit, 0);
+            }
+        }
+        return true;
+    }
+
 
     @Override
     public InternalAggregation[] buildAggregations(long[] owningBucketOrds) throws IOException {
