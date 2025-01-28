@@ -21,6 +21,7 @@ import org.opensearch.index.mapper.CompositeDataCubeFieldType;
 import org.opensearch.index.query.QueryBuilder;
 import org.opensearch.search.aggregations.AggregatorFactory;
 import org.opensearch.search.aggregations.bucket.histogram.DateHistogramAggregatorFactory;
+import org.opensearch.search.aggregations.bucket.terms.TermsAggregatorFactory;
 import org.opensearch.search.aggregations.metrics.MetricAggregatorFactory;
 import org.opensearch.search.internal.SearchContext;
 import org.opensearch.search.startree.filter.StarTreeFilter;
@@ -30,6 +31,7 @@ import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -113,6 +115,13 @@ public class StarTreeQueryContext {
             if (validateDateHistogramSupport(compositeMappedFieldType, aggregatorFactory)) {
                 continue;
             }
+
+            // validation for terms aggregation
+            if (validateKeywordTermsAggregationSupport(compositeMappedFieldType, aggregatorFactory)) {
+                continue;
+            }
+
+            // invalid query shape
             return false;
         }
 
@@ -150,6 +159,35 @@ public class StarTreeQueryContext {
         }
         return false;
     }
+
+    private static boolean validateKeywordTermsAggregationSupport(
+            CompositeDataCubeFieldType compositeIndexFieldInfo,
+            AggregatorFactory aggregatorFactory
+    ) {
+        if (!(aggregatorFactory instanceof TermsAggregatorFactory termsAggregatorFactory)
+                || aggregatorFactory.getSubFactories().getFactories().length < 1) {
+            return false;
+        }
+
+        String requestField = termsAggregatorFactory.getField();
+        Set<String> supportedDimensions = compositeIndexFieldInfo.getDimensions()
+                .stream()
+                .map(Dimension::getField)
+                .collect(Collectors.toSet());
+
+        if (!supportedDimensions.contains(requestField)) {
+            return false;
+        }
+
+        // Validate all sub-factories
+        for (AggregatorFactory subFactory : aggregatorFactory.getSubFactories().getFactories()) {
+            if (!validateStarTreeMetricSupport(compositeIndexFieldInfo, subFactory)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
 
     private StarTreeFilter getStarTreeFilter(
         SearchContext context,
