@@ -32,6 +32,8 @@
 
 package org.opensearch.search.aggregations.bucket.composite;
 
+import it.unimi.dsi.fastutil.longs.Long2IntMap;
+import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.search.CollectionTerminatedException;
 import org.apache.lucene.util.PriorityQueue;
@@ -79,7 +81,9 @@ final class CompositeValuesCollectorQueue extends PriorityQueue<Integer> impleme
 
     private final BigArrays bigArrays;
     private final int maxSize;
-    private final Map<Slot, Integer> map; // to quickly find the slot for a value
+//    private final Map<Slot, Integer> map; // to quickly find the slot for a value
+
+    private final Long2IntOpenHashMap map;
     private final SingleDimensionValuesSource<?>[] arrays;
 
     private LongArray docCounts;
@@ -97,7 +101,9 @@ final class CompositeValuesCollectorQueue extends PriorityQueue<Integer> impleme
         this.bigArrays = bigArrays;
         this.maxSize = size;
         this.arrays = sources;
-        this.map = new HashMap<>(size);
+//        this.map = new HashMap<>(size);
+        this.map = new Long2IntOpenHashMap(size);
+        map.defaultReturnValue(-1);
         if (afterKey != null) {
             assert afterKey.size() == sources.length;
             afterKeyIsSet = true;
@@ -124,8 +130,22 @@ final class CompositeValuesCollectorQueue extends PriorityQueue<Integer> impleme
      * Try to get the slot of the current/candidate values in the queue and returns
      * the slot if the candidate is already in the queue or null if the candidate is not present.
      */
+//    Integer getCurrentSlot() {
+//        return map.get(new Slot(CANDIDATE_SLOT));
+//    }
     Integer getCurrentSlot() {
-        return map.get(new Slot(CANDIDATE_SLOT));
+        long key = computeHashForCandidate();
+        int slot = map.get(key);
+        return slot == -1 ? null : slot;
+    }
+
+    // A hash function that uniquely identifies the composite key
+    long computeHashForCandidate() {
+        long hash = 1;
+        for (int i = 0; i < arrays.length; i++) {
+            hash = 31 * hash + arrays[i].hashCodeCurrent();
+        }
+        return hash;
     }
 
     /**
@@ -281,11 +301,66 @@ final class CompositeValuesCollectorQueue extends PriorityQueue<Integer> impleme
      *
      * @throws CollectionTerminatedException if the current collection can be terminated early due to index sorting.
      */
+//    boolean addIfCompetitive(int indexSortSourcePrefix, long inc) {
+//        // checks if the candidate key is competitive
+//        Integer curSlot = getCurrentSlot();
+//        if (curSlot != null) {
+//            // this key is already in the top N, skip it
+//            docCounts.increment(curSlot, inc);
+//            return true;
+//        }
+//
+//        if (afterKeyIsSet) {
+//            int cmp = compareCurrentWithAfter();
+//            if (cmp <= 0) {
+//                if (indexSortSourcePrefix < 0 && cmp == indexSortSourcePrefix) {
+//                    // the leading index sort is and the leading source order are both reversed,
+//                    // so we can early terminate when we reach a document that is smaller
+//                    // than the after key (collected on a previous page).
+//                    throw new CollectionTerminatedException();
+//                }
+//                // the key was collected on a previous page, skip it.
+//                return false;
+//            }
+//        }
+//
+//        // the heap is full, check if the candidate key larger than max heap top
+//        if (size() >= maxSize) {
+//            int cmp = compare(CANDIDATE_SLOT, top());
+//            if (cmp > 0) {
+//                if (cmp <= indexSortSourcePrefix) {
+//                    // index sort guarantees the following documents will have a key larger than the current candidate,
+//                    // so we can early terminate.
+//                    throw new CollectionTerminatedException();
+//                }
+//                // the candidate key is not competitive, skip it.
+//                return false;
+//            }
+//        }
+//        // the candidate key is competitive
+//        final int newSlot;
+//        if (size() >= maxSize) {
+//            // the queue is full, we replace the last key with this candidate
+//            int slot = pop();
+//            map.remove(new Slot(slot));
+//            // and we recycle the deleted slot
+//            newSlot = slot;
+//        } else {
+//            newSlot = size();
+//        }
+//        // move the candidate key to its new slot by copy its values to the new slot
+//        copyCurrent(newSlot, inc);
+//        map.put(new Slot(newSlot), newSlot);
+//        add(newSlot);
+//        return true;
+//    }
+
     boolean addIfCompetitive(int indexSortSourcePrefix, long inc) {
-        // checks if the candidate key is competitive
-        Integer curSlot = getCurrentSlot();
-        if (curSlot != null) {
-            // this key is already in the top N, skip it
+        long candidateHash = computeHashForCandidate();
+        int curSlot = map.get(candidateHash);
+
+        if (curSlot != -1) {
+            // Already in queue, just increment doc count
             docCounts.increment(curSlot, inc);
             return true;
         }
@@ -294,45 +369,43 @@ final class CompositeValuesCollectorQueue extends PriorityQueue<Integer> impleme
             int cmp = compareCurrentWithAfter();
             if (cmp <= 0) {
                 if (indexSortSourcePrefix < 0 && cmp == indexSortSourcePrefix) {
-                    // the leading index sort is and the leading source order are both reversed,
-                    // so we can early terminate when we reach a document that is smaller
-                    // than the after key (collected on a previous page).
                     throw new CollectionTerminatedException();
                 }
-                // the key was collected on a previous page, skip it.
                 return false;
             }
         }
 
-        // the heap is full, check if the candidate key larger than max heap top
         if (size() >= maxSize) {
             int cmp = compare(CANDIDATE_SLOT, top());
             if (cmp > 0) {
                 if (cmp <= indexSortSourcePrefix) {
-                    // index sort guarantees the following documents will have a key larger than the current candidate,
-                    // so we can early terminate.
                     throw new CollectionTerminatedException();
                 }
-                // the candidate key is not competitive, skip it.
                 return false;
             }
         }
-        // the candidate key is competitive
+
         final int newSlot;
         if (size() >= maxSize) {
-            // the queue is full, we replace the last key with this candidate
             int slot = pop();
-            map.remove(new Slot(slot));
-            // and we recycle the deleted slot
+            map.remove(computeHashForSlot(slot)); // Remove old key
             newSlot = slot;
         } else {
             newSlot = size();
         }
-        // move the candidate key to its new slot by copy its values to the new slot
+
         copyCurrent(newSlot, inc);
-        map.put(new Slot(newSlot), newSlot);
+        map.put(candidateHash, newSlot);
         add(newSlot);
         return true;
+    }
+
+    private long computeHashForSlot(int slot) {
+        long h = 1125899906842597L; // a non-zero large prime
+        for (int i = 0; i < arrays.length; i++) {
+            h = 31 * h + arrays[i].hashCode(slot);
+        }
+        return h;
     }
 
     @Override
