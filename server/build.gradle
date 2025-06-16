@@ -72,6 +72,7 @@ dependencies {
   api project(":libs:opensearch-telemetry")
   api project(":libs:opensearch-task-commons")
 
+
   compileOnly project(":libs:agent-sm:bootstrap")
   compileOnly project(':libs:opensearch-plugin-classloader')
   testRuntimeOnly project(':libs:opensearch-plugin-classloader')
@@ -92,6 +93,8 @@ dependencies {
   // lucene spatial
   api libs.spatial4j, optional
   api libs.jtscore, optional
+
+  api "it.unimi.dsi:fastutil:8.2.2"
 
   // logging
   api libs.log4japi
