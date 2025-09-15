@@ -35,6 +35,7 @@ package org.opensearch.search.aggregations.bucket.composite;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.search.Query;
+import org.apache.lucene.util.NumericUtils;
 import org.opensearch.common.CheckedFunction;
 import org.opensearch.common.lease.Releasables;
 import org.opensearch.common.util.BigArrays;
@@ -156,6 +157,25 @@ class DoubleValuesSource extends SingleDimensionValuesSource<Double> {
                 throw new IllegalArgumentException("now() is not supported in [after] key");
             });
         }
+    }
+
+    @Override
+    void setCurrent(Comparable value) {
+        if (value == null) {
+            this.missingCurrentValue = true;
+            this.currentValue = 0L; // Default value when missing
+            return;
+        }
+        if (value instanceof Double == false) {
+            throw new IllegalArgumentException("DoubleValuesSource expects a Double, but got " + value.getClass().getSimpleName());
+        }
+        this.missingCurrentValue = false;
+        this.currentValue = NumericUtils.doubleToSortableLong((Double) value);
+    }
+
+    @Override
+    Comparable<?> getComparableValue(long rawValue) throws IOException {
+        return NumericUtils.sortableLongToDouble(rawValue);
     }
 
     @Override

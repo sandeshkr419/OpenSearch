@@ -154,6 +154,59 @@ class GlobalOrdinalValuesSource extends SingleDimensionValuesSource<BytesRef> {
     }
 
     @Override
+    void setCurrent(Comparable value) {
+        // Handle the case for a missing value in the composite key.
+        if (value == null) {
+            this.currentValue = -1;
+            return;
+        }
+        // Ensure the provided value is of the expected type.
+        if (value.getClass() != BytesRef.class) {
+            throw new IllegalArgumentException("GlobalOrdinalValuesSource expects a BytesRef, but got " + value.getClass().getSimpleName());
+        }
+
+        // This logic assumes that the `lookup` field has been initialized for the current
+        // LeafReaderContext before this method is invoked. This is a necessary prerequisite
+        // for the star-tree `offer()` path.
+        if (this.lookup == null) {
+            throw new IllegalStateException("lookup must be initialized before calling setCurrent");
+        }
+
+        final BytesRef term = (BytesRef) value;
+        try {
+            final long ord = this.lookup.lookupTerm(term);
+            if (ord < 0) {
+                // This scenario is unlikely if the key comes from the same segment's data (e.g., a star-tree).
+                // It means the term is not in this segment's dictionary. We can treat it as a missing value.
+                this.currentValue = -1;
+            } else {
+                this.currentValue = ord;
+            }
+        } catch (IOException e) {
+            // The method signature doesn't throw IOException, so we wrap it.
+            throw new RuntimeException("Failed to lookup global ordinal for term [" + term.utf8ToString() + "]", e);
+        }
+    }
+
+    @Override
+    Comparable<?> getComparableValue(long rawValue) throws IOException {
+        // The raw value -1 is the sentinel for a missing value.
+        if (rawValue == -1) {
+            return null;
+        }
+
+        // This logic relies on the `lookup` (SortedSetDocValues) being initialized
+        // for the current segment, which is a prerequisite for the star-tree path.
+        if (this.lookup == null) {
+            throw new IllegalStateException("lookup must be initialized before calling getComparableValue");
+        }
+
+        // The BytesRef returned by lookupOrd is not stable and must be deep-copied
+        // to be safely used outside the immediate scope.
+        return BytesRef.deepCopyOf(lookup.lookupOrd(rawValue));
+    }
+
+    @Override
     BytesRef toComparable(int slot) throws IOException {
         long globalOrd = values.get(slot);
         if (missingBucket && globalOrd == -1) {

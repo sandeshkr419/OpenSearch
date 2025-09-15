@@ -177,6 +177,17 @@ public class LongValuesSource extends SingleDimensionValuesSource<Long> {
     }
 
     @Override
+    void setCurrent(Comparable value) {
+        this.currentValue = (Long) value;
+    }
+
+    @Override
+    Comparable<?> getComparableValue(long rawValue) {
+        // The raw long value is the final comparable value.
+        return rawValue;
+    }
+
+    @Override
     Long toComparable(int slot) {
         if (missingBucket && bits.get(slot) == false) {
             return null;

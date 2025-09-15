@@ -140,6 +140,16 @@ public abstract class SingleDimensionValuesSource<T extends Comparable<T>> imple
      */
     abstract void setAfter(Comparable value);
 
+    abstract void setCurrent(Comparable value);
+
+    /**
+     * Decodes a raw long value from a star-tree dimension into its proper Comparable type.
+     *
+     * @param rawValue The raw long value from the star-tree.
+     * @return The decoded value as a Comparable.
+     */
+    abstract Comparable<?> getComparableValue(long rawValue) throws IOException;
+
     /**
      * Returns the after value set for this source.
      */

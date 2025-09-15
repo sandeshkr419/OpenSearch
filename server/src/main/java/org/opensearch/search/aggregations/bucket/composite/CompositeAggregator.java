@@ -57,10 +57,15 @@ import org.apache.lucene.search.Weight;
 import org.apache.lucene.search.comparators.LongComparator;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.CollectionUtil;
+import org.apache.lucene.util.FixedBitSet;
 import org.apache.lucene.util.RoaringDocIdSet;
 import org.opensearch.common.Rounding;
 import org.opensearch.common.lease.Releasables;
 import org.opensearch.index.IndexSortConfig;
+import org.opensearch.index.codec.composite.CompositeIndexFieldInfo;
+import org.opensearch.index.compositeindex.datacube.startree.index.StarTreeValues;
+import org.opensearch.index.compositeindex.datacube.startree.utils.iterator.SortedNumericStarTreeValuesIterator;
+import org.opensearch.index.compositeindex.datacube.startree.utils.iterator.StarTreeValuesIterator;
 import org.opensearch.lucene.queries.SearchAfterSortedDocQuery;
 import org.opensearch.search.DocValueFormat;
 import org.opensearch.search.aggregations.Aggregator;
@@ -72,6 +77,8 @@ import org.opensearch.search.aggregations.InternalAggregations;
 import org.opensearch.search.aggregations.LeafBucketCollector;
 import org.opensearch.search.aggregations.MultiBucketCollector;
 import org.opensearch.search.aggregations.MultiBucketConsumerService;
+import org.opensearch.search.aggregations.StarTreeBucketCollector;
+import org.opensearch.search.aggregations.StarTreePreComputeCollector;
 import org.opensearch.search.aggregations.bucket.BucketsAggregator;
 import org.opensearch.search.aggregations.bucket.filterrewrite.CompositeAggregatorBridge;
 import org.opensearch.search.aggregations.bucket.filterrewrite.FilterRewriteOptimizationContext;
@@ -80,6 +87,7 @@ import org.opensearch.search.aggregations.bucket.terms.LongKeyedBucketOrds;
 import org.opensearch.search.internal.SearchContext;
 import org.opensearch.search.searchafter.SearchAfterBuilder;
 import org.opensearch.search.sort.SortAndFormats;
+import org.opensearch.search.startree.StarTreeQueryHelper;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -94,13 +102,14 @@ import java.util.function.LongUnaryOperator;
 
 import static org.opensearch.search.aggregations.MultiBucketConsumerService.MAX_BUCKET_SETTING;
 import static org.opensearch.search.aggregations.bucket.filterrewrite.AggregatorBridge.segmentMatchAll;
+import static org.opensearch.search.startree.StarTreeQueryHelper.getSupportedStarTree;
 
 /**
  * Main aggregator that aggregates docs from multiple aggregations
  *
  * @opensearch.internal
  */
-public final class CompositeAggregator extends BucketsAggregator {
+public final class CompositeAggregator extends BucketsAggregator implements StarTreePreComputeCollector {
     private final int size;
     private final List<String> sourceNames;
     private final int[] reverseMuls;
@@ -583,12 +592,154 @@ public final class CompositeAggregator extends BucketsAggregator {
     @Override
     protected boolean tryPrecomputeAggregationForLeaf(LeafReaderContext ctx) throws IOException {
         finishLeaf(); // May need to wrap up previous leaf if it could not be precomputed
+
+        CompositeIndexFieldInfo supportedStarTree = getSupportedStarTree(context.getQueryShardContext());
+        if (supportedStarTree != null) {
+            preComputeWithStarTree(ctx, supportedStarTree);
+            return true;
+        }
+
         return filterRewriteOptimizationContext.tryOptimize(
             ctx,
             this::incrementBucketDocCount,
             segmentMatchAll(context, ctx),
             collectableSubAggregators
         );
+    }
+
+    /**
+     * Checks if the aggregation is eligible for star-tree optimization and, if so,
+     * runs the pre-computation and populates the queue.
+     */
+    private boolean preComputeWithStarTree(LeafReaderContext ctx, CompositeIndexFieldInfo starTree) throws IOException {
+        // 1. Check for unsupported features (remains the same).
+        if (rawAfterKey != null) {
+            return false;
+        }
+
+//        // 2. Validate sources are compatible (remains the same).
+//        for (CompositeValuesSourceConfig sourceConfig : sourceConfigs) {
+//            if (!(sourceConfig.valuesSource() instanceof Term)) {
+//                return false;
+//            }
+//            String fieldName = sourceConfig.valuesSource().fieldContext().field();
+//            if (starTree.getDimensions().stream().noneMatch(dim -> dim.getField().equals(fieldName))) {
+//                return false;
+//            }
+//        }
+
+        // 3. Get the specialized collector (remains the same).
+        StarTreeBucketCollector collector = getStarTreeBucketCollector(ctx, starTree, null);
+
+        // 4. Run the pre-computation. This populates the collector's internal map (remains the same).
+        StarTreeQueryHelper.preComputeBucketsWithStarTree(collector);
+
+        // 5. Retrieve the results from the collector (remains the same).
+        FixedBitSet matchingDocsBitSet = collector.getMatchingDocsBitSet();
+
+        // ================== THIS IS THE CORRECTED/ADDED STEP ==================
+        // 6. Populate the main queue from the collected results by calling offer().
+        //    This is the step that actually uses the methods we implemented.
+        if (matchingDocsBitSet.nextSetBit() == false) {
+            for (Map.Entry<CompositeKey, Long> entry : docCounts.entrySet()) {
+                queue.offer(entry.getKey(), entry.getValue());
+            }
+        }
+        // ============================ END CORRECTION ============================
+
+        return true;
+    }
+    // In CompositeAggregator.java
+
+    @Override
+    public StarTreeBucketCollector getStarTreeBucketCollector(
+            LeafReaderContext ctx,
+            CompositeIndexFieldInfo starTree,
+            StarTreeBucketCollector parentCollector
+    ) throws IOException {
+            return new CompositeStarTreeBucketCollector(ctx, starTree, parentCollector);
+    }
+
+
+    /**
+     * A StarTreeBucketCollector that generates composite keys by creating a cartesian product of dimension values
+     * found in a star-tree entry. The results are stored in an internal map.
+     */
+    private class CompositeStarTreeBucketCollector extends StarTreeBucketCollector {
+        private final LeafReaderContext ctx;
+        private final StarTreeValues starTreeValues;
+        private final SortedNumericStarTreeValuesIterator docCountsIterator;
+        private final List<StarTreeValuesIterator> dimensionIterators = new ArrayList<>();
+        private final Map<CompositeKey, Long> docCounts = new HashMap<>();
+
+        CompositeStarTreeBucketCollector(LeafReaderContext ctx, CompositeIndexFieldInfo starTree, StarTreeBucketCollector parent)
+                throws IOException {
+            super(
+                    StarTreeQueryHelper.getStarTreeValues(ctx, starTree),
+                    parent == null ? StarTreeQueryHelper.getStarTreeResult(StarTreeQueryHelper.getStarTreeValues(ctx, starTree), context, List.of()) : null
+            );
+            this.ctx = ctx;
+            this.starTreeValues = StarTreeQueryHelper.getStarTreeValues(ctx, starTree);
+            this.docCountsIterator = StarTreeQueryHelper.getDocCountsIterator(starTreeValues, starTree);
+
+            for (var sourceConfig : sourceConfigs) {
+                this.dimensionIterators.add(starTreeValues.getDimensionValuesIterator(sourceConfig.name()));
+            }
+        }
+
+        /**
+         * Returns the aggregated doc counts collected from the star-tree.
+         */
+        public Map<CompositeKey, Long> getDocCounts() {
+            return docCounts;
+        }
+
+        @Override
+        public void collectStarTreeEntry(int starTreeDocId, long owningBucketOrd) throws IOException {
+            if (docCountsIterator.advanceExact(starTreeDocId) == false) {
+                return; // No documents for this entry.
+            }
+            long docCountMetric = docCountsIterator.nextValue();
+
+            List<List<Comparable<?>>> allValuesPerDimension = new ArrayList<>();
+            for (int i = 0; i < sources.length; i++) {
+                var dimIterator = dimensionIterators.get(i);
+                if (dimIterator.advanceExact(starTreeDocId) == false) {
+                    // If any dimension is missing values, the cartesian product is empty.
+                    return;
+                }
+                var valuesForDim = new ArrayList<Comparable<?>>();
+                for (int j = 0; j < dimIterator.entryValueCount(); j++) {
+                    // The SingleDimensionValuesSource knows how to decode the raw long value
+                    // from the star-tree into the appropriate comparable type (Long, BytesRef, etc.).
+                    valuesForDim.add(sources[i].getComparableValue(dimIterator.value()));
+                }
+                allValuesPerDimension.add(valuesForDim);
+            }
+
+            // Recursively generate the cartesian product and populate the docCounts map.
+            generateAndCollect(allValuesPerDimension, 0, new Comparable<?>[sources.length], docCountMetric);
+        }
+
+        private void generateAndCollect(
+                List<List<Comparable<?>>> allValues,
+                int dimensionIndex,
+                Comparable<?>[] currentKey,
+                long docCount
+        ) {
+            if (dimensionIndex == allValues.size()) {
+                // Base case: we have a full composite key.
+                CompositeKey key = new CompositeKey(Arrays.copyOf(currentKey, currentKey.length));
+                docCounts.merge(key, docCount, Long::sum);
+                return;
+            }
+
+            List<Comparable<?>> valuesForCurrentDim = allValues.get(dimensionIndex);
+            for (Comparable<?> value : valuesForCurrentDim) {
+                currentKey[dimensionIndex] = value;
+                generateAndCollect(allValues, dimensionIndex + 1, currentKey, docCount);
+            }
+        }
     }
 
     @Override

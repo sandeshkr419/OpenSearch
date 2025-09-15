@@ -170,6 +170,15 @@ class BinaryValuesSource extends SingleDimensionValuesSource<BytesRef> {
     }
 
     @Override
+    void setCurrent(Comparable value) {
+    }
+
+    @Override
+    Comparable<?> getComparableValue(long rawValue) throws IOException {
+        return null;
+    }
+
+    @Override
     BytesRef toComparable(int slot) {
         return values.get(slot);
     }

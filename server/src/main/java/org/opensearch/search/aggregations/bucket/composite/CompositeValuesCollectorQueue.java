@@ -354,4 +354,106 @@ final class CompositeValuesCollectorQueue extends PriorityQueue<Integer> impleme
     public void close() {
         Releasables.close(docCounts);
     }
+
+    /**
+     * Sets the "current" candidate values for all sources from a CompositeKey.
+     * This primes the queue's internal sources to perform comparisons and hashing against this key.
+     *
+     * PREREQUISITE: This assumes that a `setCurrent(Comparable)` method exists on SingleDimensionValuesSource
+     * and its subclasses to set the internal candidate value.
+     *
+     * @param key The composite key to set as the current candidate.
+     */
+    private void setCurrentKey(CompositeKey key) {
+        assert key.size() == arrays.length;
+        for (int i = 0; i < arrays.length; i++) {
+            arrays[i].setCurrent(key.get(i));
+        }
+    }
+
+    /**
+     * Checks if a given key is competitive enough to be added to the queue, without modifying the queue's state.
+     * A key is competitive if it's already in the queue, or if it's "greater" than
+     * the smallest key in the queue (if the queue is full).
+     *
+     * @param key The composite key to check.
+     * @return True if the key is competitive, false otherwise.
+     */
+    public boolean isCompetitive(CompositeKey key) {
+        setCurrentKey(key);
+
+        // A key that is already in the queue is by definition competitive.
+        if (getCurrentSlot() != null) {
+            return true;
+        }
+
+        // A key that is before the `afterKey` (from a previous page) is not competitive.
+        if (afterKeyIsSet && compareCurrentWithAfter() <= 0) {
+            return false;
+        }
+
+        // If the queue is not full, any new key is competitive.
+        if (size() < maxSize) {
+            return true;
+        }
+
+        // The queue is full. The key is competitive only if it is "greater than or equal to"
+        // the top element of our max heap (which is the "smallest" key in the set).
+        // `compare` returns > 0 if the candidate is "less than" the top element.
+        return compare(CANDIDATE_SLOT, top()) <= 0;
+    }
+
+    /**
+     * Offers a pre-aggregated bucket (composed of a key and its doc count) to the queue.
+     * If the key is competitive, it's either added to the queue, or if it already exists,
+     * its document count is incremented. This method mirrors the logic of `addIfCompetitive`.
+     *
+     * @param key      The composite key of the bucket.
+     * @param docCount The document count for this bucket.
+     */
+    public void offer(CompositeKey key, long docCount) {
+        setCurrentKey(key);
+
+        // Check if the key is already in the queue.
+        Integer curSlot = getCurrentSlot();
+        if (curSlot != null) {
+            // If it exists, just increment its document count and we're done.
+            docCounts.increment(curSlot, docCount);
+            return;
+        }
+
+        // If an `afterKey` is set, ignore any keys that should have appeared on a previous page.
+        if (afterKeyIsSet && compareCurrentWithAfter() <= 0) {
+            return;
+        }
+
+        // If the queue is full, check if the candidate key is competitive against the worst key in the queue.
+        if (size() >= maxSize) {
+            if (compare(CANDIDATE_SLOT, top()) > 0) {
+                // The candidate key is "less than" the worst key, so it's not competitive.
+                return;
+            }
+        }
+
+        // The key is new and competitive, so we add it to the queue.
+        final int newSlot;
+        if (size() >= maxSize) {
+            // The queue is full, so we evict the worst key (top of the max heap).
+            int evictedSlot = pop();
+            reusableSlot.set(evictedSlot);
+            map.remove(reusableSlot);
+            // We can now reuse the evicted slot for our new key.
+            newSlot = evictedSlot;
+        } else {
+            // The queue has space, so we use a new slot.
+            newSlot = size();
+        }
+
+        // Copy the candidate key (which we set via setCurrentKey) into its new slot.
+        // This assumes the `copyCurrent` method on the sources has been adapted
+        // to copy from the candidate value field.
+        copyCurrent(newSlot, docCount);
+        map.put(new Slot(newSlot), newSlot);
+        add(newSlot);
+    }
 }

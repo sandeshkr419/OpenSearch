@@ -138,6 +138,37 @@ public class UnsignedLongValuesSource extends SingleDimensionValuesSource<BigInt
     }
 
     @Override
+    void setCurrent(Comparable value) {
+        if (value == null) {
+            // This handles a missing value from the CompositeKey. The `missingCurrentValue`
+            // flag is the primary mechanism for tracking this state.
+            this.missingCurrentValue = true;
+            // The actual value of `currentValue` is irrelevant when missing,
+            // but setting to 0 is a safe default.
+            this.currentValue = 0L;
+            return;
+        }
+
+        // Ensure the provided value is of the expected type.
+        if (value instanceof BigInteger == false) {
+            throw new IllegalArgumentException(
+                    "UnsignedLongValuesSource expects a BigInteger, but got " + value.getClass().getSimpleName()
+            );
+        }
+
+        // The value is present, so set the flag and convert the BigInteger to its
+        // internal long representation.
+        this.missingCurrentValue = false;
+        this.currentValue = ((BigInteger) value).longValue();
+    }
+
+    @Override
+    Comparable<?> getComparableValue(long rawValue) {
+        // Use the Numbers utility to convert the long to an unsigned BigInteger.
+        return Numbers.toUnsignedBigInteger(rawValue);
+    }
+
+    @Override
     BigInteger toComparable(int slot) {
         if (missingBucket && bits.get(slot) == false) {
             return null;
