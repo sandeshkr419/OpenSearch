@@ -297,8 +297,7 @@ public class TermsAggregatorFactory extends ValuesSourceAggregatorFactory {
     private static boolean isAggregationSort(BucketOrder order) {
         if (order instanceof InternalOrder.Aggregation) {
             return true;
-        } else if (order instanceof InternalOrder.CompoundOrder) {
-            InternalOrder.CompoundOrder compoundOrder = (CompoundOrder) order;
+        } else if (order instanceof CompoundOrder compoundOrder) {
             return compoundOrder.orderElements().stream().anyMatch(TermsAggregatorFactory::isAggregationSort);
         } else {
             return false;
@@ -376,8 +375,7 @@ public class TermsAggregatorFactory extends ValuesSourceAggregatorFactory {
      * if the values source is not an instance of {@link ValuesSource.Bytes.WithOrdinals}.
      */
     private static long getMaxOrd(ValuesSource source, IndexSearcher searcher) throws IOException {
-        if (source instanceof ValuesSource.Bytes.WithOrdinals) {
-            ValuesSource.Bytes.WithOrdinals valueSourceWithOrdinals = (ValuesSource.Bytes.WithOrdinals) source;
+        if (source instanceof ValuesSource.Bytes.WithOrdinals valueSourceWithOrdinals) {
             return valueSourceWithOrdinals.globalMaxOrd(searcher);
         } else {
             return -1;
@@ -463,7 +461,7 @@ public class TermsAggregatorFactory extends ValuesSourceAggregatorFactory {
                     && ordinalsValuesSource.supportsGlobalOrdinalsMapping()
                     &&
                 // we use the static COLLECT_SEGMENT_ORDS to allow tests to force specific optimizations
-                    (COLLECT_SEGMENT_ORDS != null ? COLLECT_SEGMENT_ORDS.booleanValue() : ratio <= 0.5 && maxOrd <= 2048)) {
+                    (COLLECT_SEGMENT_ORDS != null ? COLLECT_SEGMENT_ORDS : ratio <= 0.5 && maxOrd <= 2048)) {
                     /*
                     * We can use the low cardinality execution mode iff this aggregator:
                     * - has no sub-aggregator AND
@@ -502,22 +500,19 @@ public class TermsAggregatorFactory extends ValuesSourceAggregatorFactory {
                      * is only possible if we're collecting from a single
                      * bucket.
                      */
-                    remapGlobalOrds = REMAP_GLOBAL_ORDS.booleanValue();
+                    remapGlobalOrds = REMAP_GLOBAL_ORDS;
                 } else {
-                    remapGlobalOrds = true;
-                    if (includeExclude == null
-                        && cardinality == CardinalityUpperBound.ONE
-                        && (factories == AggregatorFactories.EMPTY
-                            || (isAggregationSort(order) == false && subAggCollectMode == SubAggCollectionMode.BREADTH_FIRST))) {
-                        /*
-                         * We don't need to remap global ords iff this aggregator:
-                         *    - has no include/exclude rules AND
-                         *    - only collects from a single bucket AND
-                         *    - has no sub-aggregator or only sub-aggregator that can be deferred
-                         *      ({@link SubAggCollectionMode#BREADTH_FIRST}).
-                         */
-                        remapGlobalOrds = false;
-                    }
+                    /*
+                     * We don't need to remap global ords iff this aggregator:
+                     *    - has no include/exclude rules AND
+                     *    - only collects from a single bucket AND
+                     *    - has no sub-aggregator or only sub-aggregator that can be deferred
+                     *      ({@link SubAggCollectionMode#BREADTH_FIRST}).
+                     */
+                    remapGlobalOrds = includeExclude != null
+                        || cardinality != CardinalityUpperBound.ONE
+                        || (factories != AggregatorFactories.EMPTY
+                            && (isAggregationSort(order) != false || subAggCollectMode != SubAggCollectionMode.BREADTH_FIRST));
                 }
                 return new GlobalOrdinalsStringTermsAggregator(
                     name,
@@ -540,14 +535,13 @@ public class TermsAggregatorFactory extends ValuesSourceAggregatorFactory {
         };
 
         public static ExecutionMode fromString(String value) {
-            switch (value) {
-                case "global_ordinals":
-                    return GLOBAL_ORDINALS;
-                case "map":
-                    return MAP;
-                default:
-                    throw new IllegalArgumentException("Unknown `execution_hint`: [" + value + "], expected any of [map, global_ordinals]");
-            }
+            return switch (value) {
+                case "global_ordinals" -> GLOBAL_ORDINALS;
+                case "map" -> MAP;
+                default -> throw new IllegalArgumentException(
+                    "Unknown `execution_hint`: [" + value + "], expected any of [map, global_ordinals]"
+                );
+            };
         }
 
         private final ParseField parseField;

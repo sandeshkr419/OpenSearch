@@ -18,21 +18,5 @@ import org.opensearch.search.aggregations.bucket.terms.TermsAggregator;
  * @opensearch.api
  */
 @PublicApi(since = "1.0.0")
-public class LocalBucketCountThresholds {
-
-    private final long minDocCount;
-    private final int requiredSize;
-
-    public LocalBucketCountThresholds(long localminDocCount, int localRequiredSize) {
-        this.minDocCount = localminDocCount;
-        this.requiredSize = localRequiredSize;
-    }
-
-    public int getRequiredSize() {
-        return requiredSize;
-    }
-
-    public long getMinDocCount() {
-        return minDocCount;
-    }
+public record LocalBucketCountThresholds(long minDocCount, int requiredSize) {
 }

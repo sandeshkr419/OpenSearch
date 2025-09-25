@@ -187,7 +187,7 @@ public class ScriptHeuristic extends SignificanceHeuristic {
      *
      * @opensearch.internal
      */
-    public final class LongAccessor extends Number {
+    public static final class LongAccessor extends Number {
         public long value;
 
         @Override

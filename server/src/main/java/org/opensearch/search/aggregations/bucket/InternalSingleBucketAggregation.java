@@ -56,8 +56,8 @@ import java.util.function.Function;
  */
 public abstract class InternalSingleBucketAggregation extends InternalAggregation implements SingleBucketAggregation {
 
-    private long docCount;
-    private InternalAggregations aggregations;
+    private final long docCount;
+    private final InternalAggregations aggregations;
 
     /**
      * Creates a single bucket aggregation.
@@ -128,7 +128,7 @@ public abstract class InternalSingleBucketAggregation extends InternalAggregatio
     }
 
     /**
-     * Amulti-bucket agg needs to first reduce the buckets and *their* pipelines
+     * A multi-bucket agg needs to first reduce the buckets and *their* pipelines
      * before allowing sibling pipelines to materialize.
      */
     @Override

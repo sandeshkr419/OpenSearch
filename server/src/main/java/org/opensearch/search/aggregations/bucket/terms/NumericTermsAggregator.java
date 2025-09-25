@@ -262,7 +262,7 @@ public class NumericTermsAggregator extends TermsAggregator implements StarTreeP
                 checkCancelled();
                 collectZeroDocEntriesIfNeeded(owningBucketOrds[ordIdx]);
                 long bucketsInOrd = bucketOrds.bucketsInOrd(owningBucketOrds[ordIdx]);
-                int size = (int) Math.min(bucketsInOrd, localBucketCountThresholds.getRequiredSize());
+                int size = (int) Math.min(bucketsInOrd, localBucketCountThresholds.requiredSize());
                 BucketOrdsEnum ordsEnum = bucketOrds.ordsEnum(owningBucketOrds[ordIdx]);
                 Supplier<B> emptyBucketBuilder = emptyBucketBuilder(owningBucketOrds[ordIdx]);
 

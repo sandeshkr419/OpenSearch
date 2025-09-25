@@ -82,7 +82,7 @@ public class UnsignedLongTerms extends InternalMappedTerms<UnsignedLongTerms, Un
         @Override
         public Number getKeyAsNumber() {
             if (format == DocValueFormat.UNSIGNED_LONG_SHIFTED) {
-                return (Number) format.format(term);
+                return format.format(term);
             } else {
                 return term;
             }
@@ -216,12 +216,12 @@ public class UnsignedLongTerms extends InternalMappedTerms<UnsignedLongTerms, Un
             if (agg instanceof DoubleTerms) {
                 return agg.reduce(aggregations, reduceContext);
             }
-            if (agg instanceof UnsignedLongTerms) {
-                if (((UnsignedLongTerms) agg).format == DocValueFormat.RAW) {
+            if (agg instanceof UnsignedLongTerms ult) {
+                if (ult.format == DocValueFormat.RAW) {
                     rawFormat = true;
-                } else if (((UnsignedLongTerms) agg).format == DocValueFormat.UNSIGNED_LONG_SHIFTED) {
+                } else if (ult.format == DocValueFormat.UNSIGNED_LONG_SHIFTED) {
                     unsignedLongFormat = true;
-                } else if (((UnsignedLongTerms) agg).format == DocValueFormat.UNSIGNED_LONG) {
+                } else if (ult.format == DocValueFormat.UNSIGNED_LONG) {
                     unsignedLongFormat = true;
                 }
             }

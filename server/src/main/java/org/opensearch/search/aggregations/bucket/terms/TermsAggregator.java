@@ -46,7 +46,7 @@ import org.opensearch.search.aggregations.AggregatorFactories;
 import org.opensearch.search.aggregations.BucketOrder;
 import org.opensearch.search.aggregations.InternalOrder.Aggregation;
 import org.opensearch.search.aggregations.InternalOrder.CompoundOrder;
-import org.opensearch.search.aggregations.bucket.DeferableBucketAggregator;
+import org.opensearch.search.aggregations.bucket.DeferrableBucketAggregator;
 import org.opensearch.search.aggregations.bucket.nested.NestedAggregator;
 import org.opensearch.search.aggregations.support.AggregationPath;
 import org.opensearch.search.internal.SearchContext;
@@ -63,7 +63,7 @@ import java.util.Set;
  *
  * @opensearch.internal
  */
-public abstract class TermsAggregator extends DeferableBucketAggregator {
+public abstract class TermsAggregator extends DeferrableBucketAggregator {
 
     /**
      * Bucket count thresholds
@@ -259,11 +259,10 @@ public abstract class TermsAggregator extends DeferableBucketAggregator {
         if (order instanceof Aggregation) {
             AggregationPath path = ((Aggregation) order).path();
             aggsUsedForSorting.add(path.resolveTopmostAggregator(this));
-        } else if (order instanceof CompoundOrder) {
-            CompoundOrder compoundOrder = (CompoundOrder) order;
+        } else if (order instanceof CompoundOrder compoundOrder) {
             for (BucketOrder orderElement : compoundOrder.orderElements()) {
-                if (orderElement instanceof Aggregation) {
-                    AggregationPath path = ((Aggregation) orderElement).path();
+                if (orderElement instanceof Aggregation agg) {
+                    AggregationPath path = agg.path();
                     aggsUsedForSorting.add(path.resolveTopmostAggregator(this));
                 }
             }

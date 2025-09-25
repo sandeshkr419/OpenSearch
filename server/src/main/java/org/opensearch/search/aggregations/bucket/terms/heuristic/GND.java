@@ -49,7 +49,7 @@ import static org.opensearch.core.xcontent.ConstructingObjectParser.optionalCons
 public class GND extends NXYSignificanceHeuristic {
     public static final String NAME = "gnd";
     public static final ConstructingObjectParser<GND, Void> PARSER = new ConstructingObjectParser<>(NAME, args -> {
-        boolean backgroundIsSuperset = args[0] == null ? true : (boolean) args[0];
+        boolean backgroundIsSuperset = args[0] == null || (boolean) args[0];
         return new GND(backgroundIsSuperset);
     });
     static {
@@ -89,7 +89,7 @@ public class GND extends NXYSignificanceHeuristic {
 
     /**
      * Calculates Google Normalized Distance, as described in "The Google Similarity Distance", Cilibrasi and Vitanyi, 2007
-     * link: http://arxiv.org/pdf/cs/0412098v3.pdf
+     * link: <a href="http://arxiv.org/pdf/cs/0412098v3.pdf">...</a>
      */
     @Override
     public double getScore(long subsetFreq, long subsetSize, long supersetFreq, long supersetSize) {

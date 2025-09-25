@@ -50,7 +50,7 @@ import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.aggregations.InternalAggregations;
 import org.opensearch.search.aggregations.LeafBucketCollector;
 import org.opensearch.search.aggregations.LeafBucketCollectorBase;
-import org.opensearch.search.aggregations.bucket.DeferableBucketAggregator;
+import org.opensearch.search.aggregations.bucket.DeferrableBucketAggregator;
 import org.opensearch.search.aggregations.bucket.DeferringBucketCollector;
 import org.opensearch.search.aggregations.bucket.MergingBucketsDeferringCollector;
 import org.opensearch.search.aggregations.bucket.nested.NestedAggregator;
@@ -71,7 +71,7 @@ import java.util.function.LongUnaryOperator;
  *
  * @opensearch.internal
  */
-public class VariableWidthHistogramAggregator extends DeferableBucketAggregator {
+public class VariableWidthHistogramAggregator extends DeferrableBucketAggregator {
 
     /**
      * This aggregator goes through multiple phases of collection. Each phase has a different CollectionPhase::collectValue

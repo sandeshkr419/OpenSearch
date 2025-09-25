@@ -34,7 +34,7 @@ import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.aggregations.InternalOrder;
 import org.opensearch.search.aggregations.LeafBucketCollector;
 import org.opensearch.search.aggregations.bucket.BucketsAggregator;
-import org.opensearch.search.aggregations.bucket.DeferableBucketAggregator;
+import org.opensearch.search.aggregations.bucket.DeferrableBucketAggregator;
 import org.opensearch.search.aggregations.bucket.LocalBucketCountThresholds;
 import org.opensearch.search.aggregations.support.AggregationPath;
 import org.opensearch.search.aggregations.support.ValuesSource;
@@ -59,7 +59,7 @@ import static org.opensearch.search.aggregations.bucket.terms.TermsAggregator.de
  *
  * @opensearch.internal
  */
-public class MultiTermsAggregator extends DeferableBucketAggregator {
+public class MultiTermsAggregator extends DeferrableBucketAggregator {
 
     private final BytesKeyedBucketOrds bucketOrds;
     private final MultiTermsValuesSource multiTermsValue;
@@ -129,7 +129,7 @@ public class MultiTermsAggregator extends DeferableBucketAggregator {
             collectZeroDocEntriesIfNeeded(owningBucketOrds[ordIdx]);
             long bucketsInOrd = bucketOrds.bucketsInOrd(owningBucketOrds[ordIdx]);
 
-            int size = (int) Math.min(bucketsInOrd, localBucketCountThresholds.getRequiredSize());
+            int size = (int) Math.min(bucketsInOrd, localBucketCountThresholds.requiredSize());
             PriorityQueue<InternalMultiTerms.Bucket> ordered = new BucketPriorityQueue<>(size, partiallyBuiltBucketComparator);
             InternalMultiTerms.Bucket spare = null;
             BytesRef dest = null;
@@ -141,7 +141,7 @@ public class MultiTermsAggregator extends DeferableBucketAggregator {
             while (ordsEnum.next()) {
                 long docCount = bucketDocCount(ordsEnum.ord());
                 otherDocCounts[ordIdx] += docCount;
-                if (docCount < localBucketCountThresholds.getMinDocCount()) {
+                if (docCount < localBucketCountThresholds.minDocCount()) {
                     continue;
                 }
                 if (spare == null) {

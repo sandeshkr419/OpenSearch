@@ -846,11 +846,11 @@ public class GlobalOrdinalsStringTermsAggregator extends AbstractStringTermsAggr
                 // processing each owning bucket
                 checkCancelled();
                 final int size;
-                if (localBucketCountThresholds.getMinDocCount() == 0) {
+                if (localBucketCountThresholds.minDocCount() == 0) {
                     // if minDocCount == 0 then we can end up with more buckets then maxBucketOrd() returns
-                    size = (int) Math.min(valueCount, localBucketCountThresholds.getRequiredSize());
+                    size = (int) Math.min(valueCount, localBucketCountThresholds.requiredSize());
                 } else {
-                    size = (int) Math.min(maxBucketOrd(), localBucketCountThresholds.getRequiredSize());
+                    size = (int) Math.min(maxBucketOrd(), localBucketCountThresholds.requiredSize());
                 }
                 PriorityQueue<TB> ordered = buildPriorityQueue(size);
                 final int finalOrdIdx = ordIdx;
@@ -862,7 +862,7 @@ public class GlobalOrdinalsStringTermsAggregator extends AbstractStringTermsAggr
                     @Override
                     public void accept(long globalOrd, long bucketOrd, long docCount) throws IOException {
                         otherDocCount[finalOrdIdx] += docCount;
-                        if (docCount >= localBucketCountThresholds.getMinDocCount()) {
+                        if (docCount >= localBucketCountThresholds.minDocCount()) {
                             if (spare == null) {
                                 spare = buildEmptyTemporaryBucket();
                             }

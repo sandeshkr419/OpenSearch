@@ -278,9 +278,7 @@ public abstract class InternalSignificantTerms<A extends InternalSignificantTerm
         SignificanceHeuristic heuristic = getSignificanceHeuristic().rewrite(reduceContext);
         boolean isCoordinatorPartialReduce = reduceContext.isFinalReduce() == false && reduceContext.isSliceLevel() == false;
         // Do not apply size threshold on coordinator partial reduce
-        final int size = !isCoordinatorPartialReduce
-            ? Math.min(localBucketCountThresholds.getRequiredSize(), buckets.size())
-            : buckets.size();
+        final int size = !isCoordinatorPartialReduce ? Math.min(localBucketCountThresholds.requiredSize(), buckets.size()) : buckets.size();
         BucketSignificancePriorityQueue<B> ordered = new BucketSignificancePriorityQueue<>(size);
         for (Map.Entry<String, List<B>> entry : buckets.entrySet()) {
             List<B> sameTermBuckets = entry.getValue();
@@ -288,7 +286,7 @@ public abstract class InternalSignificantTerms<A extends InternalSignificantTerm
             b.updateScore(heuristic);
             // For concurrent search case we do not apply bucket count thresholds in buildAggregation and instead is done here during
             // reduce. However, the bucket score is only evaluated at the final coordinator reduce.
-            boolean meetsThresholds = (b.subsetDf >= localBucketCountThresholds.getMinDocCount())
+            boolean meetsThresholds = (b.subsetDf >= localBucketCountThresholds.minDocCount())
                 && (((b.score > 0) || reduceContext.isSliceLevel()));
             if (isCoordinatorPartialReduce || meetsThresholds) {
                 B removed = ordered.insertWithOverflow(b);

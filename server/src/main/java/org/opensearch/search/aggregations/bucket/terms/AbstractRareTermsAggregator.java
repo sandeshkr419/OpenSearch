@@ -37,7 +37,7 @@ import org.opensearch.search.DocValueFormat;
 import org.opensearch.search.aggregations.Aggregator;
 import org.opensearch.search.aggregations.AggregatorFactories;
 import org.opensearch.search.aggregations.BucketOrder;
-import org.opensearch.search.aggregations.bucket.DeferableBucketAggregator;
+import org.opensearch.search.aggregations.bucket.DeferrableBucketAggregator;
 import org.opensearch.search.aggregations.bucket.DeferringBucketCollector;
 import org.opensearch.search.aggregations.bucket.MergingBucketsDeferringCollector;
 import org.opensearch.search.aggregations.bucket.nested.NestedAggregator;
@@ -52,7 +52,7 @@ import java.util.Random;
  *
  * @opensearch.internal
  */
-public abstract class AbstractRareTermsAggregator extends DeferableBucketAggregator {
+public abstract class AbstractRareTermsAggregator extends DeferrableBucketAggregator {
 
     static final BucketOrder ORDER = BucketOrder.compound(BucketOrder.count(true), BucketOrder.key(true)); // sort by count ascending
 

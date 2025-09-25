@@ -170,7 +170,7 @@ public class StreamStringTermsAggregator extends AbstractStringTermsAggregator {
                 for (long ordinal = 0; ordinal < valueCount; ordinal++) {
                     long docCount = bucketDocCount(ordinal);
                     if (bucketCountThresholds.getMinDocCount() == 0 || docCount > 0) {
-                        if (docCount >= localBucketCountThresholds.getMinDocCount()) {
+                        if (docCount >= localBucketCountThresholds.minDocCount()) {
                             B finalBucket = buildFinalBucket(ordinal, docCount);
                             bucketsPerOwningOrd.add(finalBucket);
                         }

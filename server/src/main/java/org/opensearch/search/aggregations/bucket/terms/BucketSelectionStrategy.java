@@ -39,7 +39,7 @@ enum BucketSelectionStrategy {
             while (input.ordsEnum.next()) {
                 long docCount = input.bucketDocCountFunction.bucketDocCount(input.ordsEnum.ord());
                 otherDocCount += docCount;
-                if (docCount < input.localBucketCountThresholds.getMinDocCount()) {
+                if (docCount < input.localBucketCountThresholds.minDocCount()) {
                     continue;
                 }
                 if (spare == null) {
@@ -79,7 +79,7 @@ enum BucketSelectionStrategy {
             while (input.ordsEnum.next()) {
                 long docCount = input.bucketDocCountFunction.bucketDocCount(input.ordsEnum.ord());
                 otherDocCount += docCount;
-                if (docCount < input.localBucketCountThresholds.getMinDocCount()) {
+                if (docCount < input.localBucketCountThresholds.minDocCount()) {
                     continue;
                 }
 

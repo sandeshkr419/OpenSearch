@@ -43,7 +43,7 @@ import org.opensearch.search.aggregations.Aggregator;
 import org.opensearch.search.aggregations.AggregatorFactories;
 import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.aggregations.LeafBucketCollector;
-import org.opensearch.search.aggregations.bucket.DeferableBucketAggregator;
+import org.opensearch.search.aggregations.bucket.DeferrableBucketAggregator;
 import org.opensearch.search.aggregations.bucket.DeferringBucketCollector;
 import org.opensearch.search.aggregations.bucket.SingleBucketAggregator;
 import org.opensearch.search.aggregations.support.ValuesSourceConfig;
@@ -65,7 +65,7 @@ import java.util.Map;
  *
  * @opensearch.internal
  */
-public class SamplerAggregator extends DeferableBucketAggregator implements SingleBucketAggregator {
+public class SamplerAggregator extends DeferrableBucketAggregator implements SingleBucketAggregator {
 
     public static final ParseField SHARD_SIZE_FIELD = new ParseField("shard_size");
     public static final ParseField MAX_DOCS_PER_VALUE_FIELD = new ParseField("max_docs_per_value");

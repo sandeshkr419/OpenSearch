@@ -251,7 +251,7 @@ public class MapStringTermsAggregator extends AbstractStringTermsAggregator {
             for (int ordIdx = 0; ordIdx < owningBucketOrds.length; ordIdx++) {
                 checkCancelled();
                 collectZeroDocEntriesIfNeeded(owningBucketOrds[ordIdx]);
-                int size = (int) Math.min(bucketOrds.size(), localBucketCountThresholds.getRequiredSize());
+                int size = (int) Math.min(bucketOrds.size(), localBucketCountThresholds.requiredSize());
 
                 PriorityQueue<B> ordered = buildPriorityQueue(size);
                 B spare = null;
@@ -260,7 +260,7 @@ public class MapStringTermsAggregator extends AbstractStringTermsAggregator {
                 while (ordsEnum.next()) {
                     long docCount = bucketDocCount(ordsEnum.ord());
                     otherDocCounts[ordIdx] += docCount;
-                    if (docCount < localBucketCountThresholds.getMinDocCount()) {
+                    if (docCount < localBucketCountThresholds.minDocCount()) {
                         continue;
                     }
                     if (spare == null) {

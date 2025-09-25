@@ -193,8 +193,8 @@ public abstract class NXYSignificanceHeuristic extends SignificanceHeuristic {
      */
     protected static <T> Function<Object[], T> buildFromParsedArgs(BiFunction<Boolean, Boolean, T> ctor) {
         return args -> {
-            boolean includeNegatives = args[0] == null ? false : (boolean) args[0];
-            boolean backgroundIsSuperset = args[1] == null ? true : (boolean) args[1];
+            boolean includeNegatives = args[0] != null && (boolean) args[0];
+            boolean backgroundIsSuperset = args[1] == null || (boolean) args[1];
             return ctor.apply(includeNegatives, backgroundIsSuperset);
         };
     }

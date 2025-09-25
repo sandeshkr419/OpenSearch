@@ -49,7 +49,7 @@ import org.opensearch.search.aggregations.CardinalityUpperBound;
 import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.aggregations.LeafBucketCollector;
 import org.opensearch.search.aggregations.LeafBucketCollectorBase;
-import org.opensearch.search.aggregations.bucket.DeferableBucketAggregator;
+import org.opensearch.search.aggregations.bucket.DeferrableBucketAggregator;
 import org.opensearch.search.aggregations.bucket.DeferringBucketCollector;
 import org.opensearch.search.aggregations.bucket.MergingBucketsDeferringCollector;
 import org.opensearch.search.aggregations.bucket.filterrewrite.DateHistogramAggregatorBridge;
@@ -83,7 +83,7 @@ import static org.opensearch.search.aggregations.bucket.filterrewrite.DateHistog
  *
  * @opensearch.internal
  */
-abstract class AutoDateHistogramAggregator extends DeferableBucketAggregator {
+abstract class AutoDateHistogramAggregator extends DeferrableBucketAggregator {
     static AutoDateHistogramAggregator build(
         String name,
         AggregatorFactories factories,

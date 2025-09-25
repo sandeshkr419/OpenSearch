@@ -86,8 +86,8 @@ public class IncludeExclude implements Writeable, ToXContentFragment {
     /**
      * The default length limit for a reg-ex string. The value is derived from {@link IndexSettings#MAX_REGEX_LENGTH_SETTING}.
      * For context, see:
-     * https://github.com/opensearch-project/OpenSearch/issues/1992
-     * https://github.com/opensearch-project/OpenSearch/issues/2858
+     * <a href="https://github.com/opensearch-project/OpenSearch/issues/1992">...</a>
+     * <a href="https://github.com/opensearch-project/OpenSearch/issues/2858">...</a>
      */
     private static final int DEFAULT_MAX_REGEX_LENGTH = 1000;
     /**
@@ -770,7 +770,7 @@ public class IncludeExclude implements Writeable, ToXContentFragment {
 
     /**
      * Wrapper method that imposes a default regex limit.
-     * See https://github.com/opensearch-project/OpenSearch/issues/2858
+     * See <a href="https://github.com/opensearch-project/OpenSearch/issues/2858">...</a>
      */
     public StringFilter convertToStringFilter(DocValueFormat format) {
         return convertToStringFilter(format, DEFAULT_MAX_REGEX_LENGTH);
@@ -801,7 +801,7 @@ public class IncludeExclude implements Writeable, ToXContentFragment {
 
     /**
      * Wrapper method that imposes a default regex limit.
-     * See https://github.com/opensearch-project/OpenSearch/issues/2858
+     * See <a href="https://github.com/opensearch-project/OpenSearch/issues/2858">...</a>
      */
     public OrdinalsFilter convertToOrdinalsFilter(DocValueFormat format) {
         return convertToOrdinalsFilter(format, DEFAULT_MAX_REGEX_LENGTH);

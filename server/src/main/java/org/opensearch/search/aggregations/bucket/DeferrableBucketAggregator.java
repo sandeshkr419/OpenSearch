@@ -50,7 +50,7 @@ import java.util.function.BiConsumer;
  *
  * @opensearch.internal
  */
-public abstract class DeferableBucketAggregator extends BucketsAggregator {
+public abstract class DeferrableBucketAggregator extends BucketsAggregator {
     /**
      * Wrapper that records collections. Non-null if any aggregations have
      * been deferred.
@@ -58,7 +58,7 @@ public abstract class DeferableBucketAggregator extends BucketsAggregator {
     private DeferringBucketCollector recordingWrapper;
     private List<String> deferredAggregationNames;
 
-    protected DeferableBucketAggregator(
+    protected DeferrableBucketAggregator(
         String name,
         AggregatorFactories factories,
         SearchContext context,
