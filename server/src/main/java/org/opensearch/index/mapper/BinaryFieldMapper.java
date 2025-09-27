@@ -246,7 +246,7 @@ public class BinaryFieldMapper extends ParametrizedFieldMapper {
         // Benchmarks show that ArrayList performs much better
         // For details, see: https://github.com/opensearch-project/OpenSearch/pull/9426
         // Benchmarks are in CustomBinaryDocValuesFiledBenchmark
-        private final ArrayList<byte[]> bytesList;
+        final ArrayList<byte[]> bytesList;
 
         public CustomBinaryDocValuesField(String name, byte[] bytes) {
             super(name);

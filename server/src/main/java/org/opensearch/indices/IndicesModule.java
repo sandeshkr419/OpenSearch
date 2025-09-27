@@ -55,6 +55,7 @@ import org.opensearch.index.mapper.FieldAliasMapper;
 import org.opensearch.index.mapper.FieldNamesFieldMapper;
 import org.opensearch.index.mapper.FlatObjectFieldMapper;
 import org.opensearch.index.mapper.GeoPointFieldMapper;
+import org.opensearch.index.mapper.HyperLogLogFieldMapper;
 import org.opensearch.index.mapper.IdFieldMapper;
 import org.opensearch.index.mapper.IgnoredFieldMapper;
 import org.opensearch.index.mapper.IndexFieldMapper;
@@ -178,6 +179,7 @@ public class IndicesModule extends AbstractModule {
         mappers.put(WildcardFieldMapper.CONTENT_TYPE, WildcardFieldMapper.PARSER);
         mappers.put(StarTreeMapper.CONTENT_TYPE, new StarTreeMapper.TypeParser());
         mappers.put(SemanticVersionFieldMapper.CONTENT_TYPE, SemanticVersionFieldMapper.PARSER);
+        mappers.put(HyperLogLogFieldMapper.CONTENT_TYPE, HyperLogLogFieldMapper.PARSER);
 
         for (MapperPlugin mapperPlugin : mapperPlugins) {
             for (Map.Entry<String, Mapper.TypeParser> entry : mapperPlugin.getMappers().entrySet()) {
