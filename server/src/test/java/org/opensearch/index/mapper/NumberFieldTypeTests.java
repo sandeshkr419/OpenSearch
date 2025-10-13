@@ -985,7 +985,7 @@ public class NumberFieldTypeTests extends FieldTypeTestCase {
         assertEquals(Collections.singletonList(3), fetchSourceValue(mapper, 3.14));
         assertEquals(Collections.singletonList(42), fetchSourceValue(mapper, "42.9"));
 
-        MappedFieldType nullValueMapper = new NumberFieldMapper.Builder("field", NumberType.FLOAT, false, true).nullValue(2.71f)
+        MappedFieldType nullValueMapper = new NumberFieldMapper.Builder("field", NumberType.FLOAT, false, true).nullValue()
             .build(context)
             .fieldType();
         assertEquals(Collections.singletonList(2.71f), fetchSourceValue(nullValueMapper, ""));

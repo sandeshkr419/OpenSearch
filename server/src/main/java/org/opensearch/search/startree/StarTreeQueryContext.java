@@ -21,6 +21,7 @@ import org.opensearch.index.compositeindex.datacube.startree.utils.date.DateTime
 import org.opensearch.index.mapper.CompositeDataCubeFieldType;
 import org.opensearch.index.query.QueryBuilder;
 import org.opensearch.search.aggregations.AggregatorFactory;
+import org.opensearch.search.aggregations.bucket.composite.CompositeAggregationFactory;
 import org.opensearch.search.aggregations.bucket.histogram.DateHistogramAggregatorFactory;
 import org.opensearch.search.aggregations.bucket.range.RangeAggregatorFactory;
 import org.opensearch.search.aggregations.bucket.terms.MultiTermsAggregationFactory;
@@ -238,6 +239,17 @@ public class StarTreeQueryContext {
             .containsAll(multiTermsAggregationFactory.getRequestFields());
     }
 
+    private static boolean validateCompositeAggregationSupport(
+        CompositeDataCubeFieldType compositeIndexFieldInfo,
+        CompositeAggregationFactory compositeAggregationFactory
+    ) {
+        return compositeIndexFieldInfo.getDimensions()
+            .stream()
+            .map(Dimension::getField)
+            .collect(Collectors.toSet())
+            .containsAll(compositeAggregationFactory.getRequestFields());
+    }
+
     private static boolean validateNestedAggregationStructure(
         CompositeDataCubeFieldType compositeIndexFieldInfo,
         AggregatorFactory aggregatorFactory
@@ -264,6 +276,10 @@ public class StarTreeQueryContext {
             case MultiTermsAggregationFactory multiTermsAggregationFactory -> isValid = validateMultiTermsAggregationSupport(
                 compositeIndexFieldInfo,
                 multiTermsAggregationFactory
+            );
+            case CompositeAggregationFactory compositeAggregationFactory -> isValid = validateCompositeAggregationSupport(
+                compositeIndexFieldInfo,
+                compositeAggregationFactory
             );
             case null, default -> {
                 return false;

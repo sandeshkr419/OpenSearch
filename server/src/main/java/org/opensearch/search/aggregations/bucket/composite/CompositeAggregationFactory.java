@@ -40,6 +40,8 @@ import org.opensearch.search.aggregations.CardinalityUpperBound;
 import org.opensearch.search.internal.SearchContext;
 
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -47,10 +49,11 @@ import java.util.Map;
  *
  * @opensearch.internal
  */
-class CompositeAggregationFactory extends AggregatorFactory {
+public class CompositeAggregationFactory extends AggregatorFactory {
     private final int size;
     private final CompositeValuesSourceConfig[] sources;
     private final CompositeKey afterKey;
+    private final List<String> requestFields;
 
     CompositeAggregationFactory(
         String name,
@@ -66,6 +69,7 @@ class CompositeAggregationFactory extends AggregatorFactory {
         this.size = size;
         this.sources = sources;
         this.afterKey = afterKey;
+        this.requestFields = Arrays.stream(sources).map(CompositeValuesSourceConfig::name).toList();
     }
 
     @Override
@@ -81,5 +85,19 @@ class CompositeAggregationFactory extends AggregatorFactory {
     @Override
     protected boolean supportsConcurrentSegmentSearch() {
         return true;
+    }
+
+    /**
+     * Returns the field names used in this composite aggregation
+     */
+    public List<String> getRequestFields() {
+        return requestFields;
+    }
+
+    /**
+     * Returns the composite values source configurations
+     */
+    public CompositeValuesSourceConfig[] getSources() {
+        return sources;
     }
 }
