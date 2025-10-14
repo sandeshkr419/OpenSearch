@@ -149,8 +149,8 @@ class DoubleValuesSource extends SingleDimensionValuesSource<Double> {
     void setAfter(Comparable value) {
         if (missingBucket && value == null) {
             afterValue = null;
-        } else if (value instanceof Number) {
-            afterValue = ((Number) value).doubleValue();
+        } else if (value instanceof Number number) {
+            afterValue = number.doubleValue();
         } else {
             afterValue = format.parseDouble(value.toString(), false, () -> {
                 throw new IllegalArgumentException("now() is not supported in [after] key");

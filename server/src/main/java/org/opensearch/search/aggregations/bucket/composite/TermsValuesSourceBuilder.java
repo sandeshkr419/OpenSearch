@@ -1,3 +1,4 @@
+
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -209,7 +210,7 @@ public class TermsValuesSourceBuilder extends CompositeValuesSourceBuilder<Terms
                     LongConsumer addRequestCircuitBreakerBytes,
                     CompositeValuesSourceConfig compositeValuesSourceConfig) -> {
 
-                    if (valuesSourceConfig.hasGlobalOrdinals() && reader instanceof DirectoryReader) {
+                    if (valuesSourceConfig.hasGlobalOrdinals() && reader instanceof DirectoryReader directoryReader) {
                         ValuesSource.Bytes.WithOrdinals vs = (ValuesSource.Bytes.WithOrdinals) compositeValuesSourceConfig.valuesSource();
                         return new GlobalOrdinalValuesSource(
                             bigArrays,

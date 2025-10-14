@@ -312,8 +312,8 @@ public class CompositeAggregationBuilder extends AbstractAggregationBuilder<Comp
                 Object obj = after.get(sourceName);
                 if (configs[i].missingBucket() && obj == null) {
                     values[i] = null;
-                } else if (obj instanceof Comparable) {
-                    values[i] = (Comparable) obj;
+                } else if (obj instanceof Comparable comparable) {
+                    values[i] = comparable;
                 } else {
                     throw new IllegalArgumentException(
                         "Invalid value for [after."

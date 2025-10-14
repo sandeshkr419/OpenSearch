@@ -474,8 +474,8 @@ public final class CompositeAggregator extends BucketsAggregator {
     private Sort applySortFieldRounding(Sort sort) {
         SortField[] sortFields = new SortField[sort.getSort().length];
         for (int i = 0; i < sort.getSort().length; i++) {
-            if (sourceConfigs[i].valuesSource() instanceof RoundingValuesSource) {
-                LongUnaryOperator round = ((RoundingValuesSource) sourceConfigs[i].valuesSource())::round;
+            if (sourceConfigs[i].valuesSource() instanceof RoundingValuesSource roundingSource) {
+                LongUnaryOperator round = roundingSource::round;
                 final SortedNumericSortField delegate = (SortedNumericSortField) sort.getSort()[i];
                 sortFields[i] = new SortedNumericSortField(delegate.getField(), delegate.getNumericType(), delegate.getReverse()) {
                     @Override

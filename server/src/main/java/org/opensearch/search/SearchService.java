@@ -847,10 +847,10 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
         } catch (Exception e) {
             // execution exception can happen while loading the cache, strip it
             Exception exception = e;
-            if (exception instanceof ExecutionException) {
-                exception = (exception.getCause() == null || exception.getCause() instanceof Exception)
-                    ? (Exception) exception.getCause()
-                    : new OpenSearchException(exception.getCause());
+            if (exception instanceof ExecutionException executionException) {
+                exception = (executionException.getCause() == null || executionException.getCause() instanceof Exception)
+                    ? (Exception) executionException.getCause()
+                    : new OpenSearchException(executionException.getCause());
             }
             logger.trace("Query phase failed", exception);
             processFailure(readerContext, exception);
@@ -1213,8 +1213,8 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
      */
     public PitReaderContext getPitReaderContext(ShardSearchContextId id) {
         ReaderContext context = activeReaders.get(id.getId());
-        if (context instanceof PitReaderContext) {
-            return (PitReaderContext) context;
+        if (context instanceof PitReaderContext pitReaderContext) {
+            return pitReaderContext;
         }
         return null;
     }
@@ -1225,9 +1225,12 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
     public List<ListPitInfo> getAllPITReaderContexts() {
         final List<ListPitInfo> pitContextsInfo = new ArrayList<>();
         for (ReaderContext ctx : activeReaders.values()) {
-            if (ctx instanceof PitReaderContext) {
-                final PitReaderContext context = (PitReaderContext) ctx;
-                ListPitInfo pitInfo = new ListPitInfo(context.getPitId(), context.getCreationTime(), context.getKeepAlive());
+            if (ctx instanceof PitReaderContext pitReaderContext) {
+                ListPitInfo pitInfo = new ListPitInfo(
+                    pitReaderContext.getPitId(),
+                    pitReaderContext.getCreationTime(),
+                    pitReaderContext.getKeepAlive()
+                );
                 pitContextsInfo.add(pitInfo);
             }
         }

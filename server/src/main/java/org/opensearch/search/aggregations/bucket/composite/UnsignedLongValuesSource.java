@@ -199,8 +199,7 @@ public class UnsignedLongValuesSource extends SingleDimensionValuesSource<BigInt
         }
         final byte[] lowerPoint;
         final byte[] upperPoint;
-        if (query instanceof PointRangeQuery) {
-            final PointRangeQuery rangeQuery = (PointRangeQuery) query;
+        if (query instanceof PointRangeQuery rangeQuery) {
             lowerPoint = rangeQuery.getLowerPoint();
             upperPoint = rangeQuery.getUpperPoint();
         } else {
@@ -208,8 +207,7 @@ public class UnsignedLongValuesSource extends SingleDimensionValuesSource<BigInt
             upperPoint = null;
         }
 
-        if (fieldType != null && fieldType.unwrap() instanceof NumberFieldMapper.NumberFieldType) {
-            NumberFieldMapper.NumberFieldType ft = (NumberFieldMapper.NumberFieldType) fieldType;
+        if (fieldType != null && fieldType.unwrap() instanceof NumberFieldMapper.NumberFieldType ft) {
             if (ft.typeName() == "unsigned_long") {
                 return new UnsignedLongPointsSortedDocsProducer(fieldType.name(), lowerPoint, upperPoint);
             }
