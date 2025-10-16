@@ -46,16 +46,12 @@ public final class GenericSearchExtBuilder extends SearchExtBuilder {
         }
 
         static ValueType fromInt(int value) {
-            switch (value) {
-                case 0:
-                    return SIMPLE;
-                case 1:
-                    return MAP;
-                case 2:
-                    return LIST;
-                default:
-                    throw new IllegalArgumentException("Unsupported value: " + value);
-            }
+            return switch (value) {
+                case 0 -> SIMPLE;
+                case 1 -> MAP;
+                case 2 -> LIST;
+                default -> throw new IllegalArgumentException("Unsupported value: " + value);
+            };
         }
     }
 
@@ -66,19 +62,12 @@ public final class GenericSearchExtBuilder extends SearchExtBuilder {
 
     public GenericSearchExtBuilder(StreamInput in) throws IOException {
         valueType = ValueType.fromInt(in.readInt());
-        switch (valueType) {
-            case SIMPLE:
-                genericObj = in.readGenericValue();
-                break;
-            case MAP:
-                genericObj = in.readMap();
-                break;
-            case LIST:
-                genericObj = in.readList(r -> r.readGenericValue());
-                break;
-            default:
-                throw new IllegalStateException("Unable to construct GenericSearchExtBuilder from incoming stream.");
-        }
+        genericObj = switch (valueType) {
+            case SIMPLE -> in.readGenericValue();
+            case MAP -> in.readMap();
+            case LIST -> in.readList(StreamInput::readGenericValue);
+            default -> throw new IllegalStateException("Unable to construct GenericSearchExtBuilder from incoming stream.");
+        };
     }
 
     public static GenericSearchExtBuilder fromXContent(XContentParser parser) throws IOException {
@@ -86,19 +75,26 @@ public final class GenericSearchExtBuilder extends SearchExtBuilder {
         // If it's START_OBJECT, parse as map, if it's START_ARRAY, parse as list, else
         // parse as simpleVal
         XContentParser.Token token = parser.currentToken();
-        ValueType valueType;
-        Object genericObj;
-        if (token == XContentParser.Token.START_OBJECT) {
-            genericObj = parser.map();
-            valueType = ValueType.MAP;
-        } else if (token == XContentParser.Token.START_ARRAY) {
-            genericObj = parser.list();
-            valueType = ValueType.LIST;
-        } else if (token.isValue()) {
-            genericObj = parser.objectText();
-            valueType = ValueType.SIMPLE;
-        } else {
-            throw new XContentParseException("Unknown token: " + token);
+        final Object genericObj;
+        final ValueType valueType;
+
+        switch (token) {
+            case START_OBJECT -> {
+                genericObj = parser.map();
+                valueType = ValueType.MAP;
+            }
+            case START_ARRAY -> {
+                genericObj = parser.list();
+                valueType = ValueType.LIST;
+            }
+            default -> {
+                if (token.isValue()) {
+                    genericObj = parser.objectText();
+                    valueType = ValueType.SIMPLE;
+                } else {
+                    throw new XContentParseException("Unknown token: " + token);
+                }
+            }
         }
 
         return new GenericSearchExtBuilder(genericObj, valueType);
@@ -113,32 +109,21 @@ public final class GenericSearchExtBuilder extends SearchExtBuilder {
     public void writeTo(StreamOutput out) throws IOException {
         out.writeInt(valueType.getValue());
         switch (valueType) {
-            case SIMPLE:
-                out.writeGenericValue(genericObj);
-                break;
-            case MAP:
-                out.writeMap((Map<String, Object>) genericObj);
-                break;
-            case LIST:
-                out.writeCollection((List<Object>) genericObj, StreamOutput::writeGenericValue);
-                break;
-            default:
-                throw new IllegalStateException("Unknown valueType: " + valueType);
+            case SIMPLE -> out.writeGenericValue(genericObj);
+            case MAP -> out.writeMap((Map<String, Object>) genericObj);
+            case LIST -> out.writeCollection((List<Object>) genericObj, StreamOutput::writeGenericValue);
+            default -> throw new IllegalStateException("Unknown valueType: " + valueType);
         }
     }
 
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-        switch (valueType) {
-            case SIMPLE:
-                return builder.field(EXT_BUILDER_NAME.getPreferredName(), genericObj);
-            case MAP:
-                return builder.field(EXT_BUILDER_NAME.getPreferredName(), (Map<String, Object>) genericObj);
-            case LIST:
-                return builder.field(EXT_BUILDER_NAME.getPreferredName(), (List<Object>) genericObj);
-            default:
-                return null;
-        }
+        return switch (valueType) {
+            case SIMPLE -> builder.field(EXT_BUILDER_NAME.getPreferredName(), genericObj);
+            case MAP -> builder.field(EXT_BUILDER_NAME.getPreferredName(), (Map<String, Object>) genericObj);
+            case LIST -> builder.field(EXT_BUILDER_NAME.getPreferredName(), (List<Object>) genericObj);
+            default -> null;
+        };
     }
 
     // We need this for the equals method.
@@ -156,10 +141,10 @@ public final class GenericSearchExtBuilder extends SearchExtBuilder {
         if (obj == null) {
             return false;
         }
-        if (!(obj instanceof GenericSearchExtBuilder)) {
+        if (!(obj instanceof GenericSearchExtBuilder gse)) {
             return false;
         }
-        return Objects.equals(getValue(), ((GenericSearchExtBuilder) obj).getValue())
-            && Objects.equals(valueType, ((GenericSearchExtBuilder) obj).valueType);
+        return Objects.equals(getValue(), gse.getValue())
+            && Objects.equals(valueType, gse.valueType);
     }
 }

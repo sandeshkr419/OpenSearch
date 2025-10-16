@@ -161,7 +161,7 @@ public class StarTreeQueryHelper {
         return new StarTreeBucketCollector(parentCollector) {
             String metricName = StarTreeUtils.fullyQualifiedFieldNameForStarTreeMetricsDocValues(
                 starTree.getField(),
-                ((ValuesSource.Numeric.FieldData) valuesSource).getIndexFieldName(),
+                valuesSource.getIndexFieldName(),
                 metric
             );
             SortedNumericStarTreeValuesIterator metricValuesIterator = (SortedNumericStarTreeValuesIterator) starTreeValues

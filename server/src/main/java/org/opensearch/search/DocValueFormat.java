@@ -401,13 +401,11 @@ public interface DocValueFormat extends NamedWriteable {
 
         @Override
         public long parseLong(String value, boolean roundUp, LongSupplier now) {
-            switch (value) {
-                case "false":
-                    return 0;
-                case "true":
-                    return 1;
-            }
-            throw new IllegalArgumentException("Cannot parse boolean [" + value + "], expected either [true] or [false]");
+            return switch (value) {
+                case "false" -> 0;
+                case "true" -> 1;
+                default -> throw new IllegalArgumentException("Cannot parse boolean [" + value + "], expected either [true] or [false]");
+            };
         }
 
         @Override

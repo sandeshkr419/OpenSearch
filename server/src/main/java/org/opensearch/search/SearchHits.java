@@ -351,12 +351,10 @@ public final class SearchHits implements Writeable, ToXContentFragment, Iterable
     }
 
     private static Relation parseRelation(String relation) {
-        if ("gte".equals(relation)) {
-            return Relation.GREATER_THAN_OR_EQUAL_TO;
-        } else if ("eq".equals(relation)) {
-            return Relation.EQUAL_TO;
-        } else {
-            throw new IllegalArgumentException("invalid total hits relation: " + relation);
-        }
+        return switch (relation) {
+            case "gte" -> Relation.GREATER_THAN_OR_EQUAL_TO;
+            case "eq" -> Relation.EQUAL_TO;
+            default -> throw new IllegalArgumentException("invalid total hits relation: " + relation);
+        };
     }
 }
