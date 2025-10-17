@@ -54,7 +54,7 @@ public class ProfilingAggregator extends Aggregator {
     private final AggregationProfiler profiler;
     private AggregationProfileBreakdown profileBreakdown;
 
-    public ProfilingAggregator(Aggregator delegate, AggregationProfiler profiler) throws IOException {
+    public ProfilingAggregator(Aggregator delegate, AggregationProfiler profiler) {
         this.profiler = profiler;
         this.delegate = delegate;
     }
@@ -156,10 +156,8 @@ public class ProfilingAggregator extends Aggregator {
         return delegate.toString();
     }
 
-    public static Aggregator unwrap(Aggregator agg) {
-        if (agg instanceof ProfilingAggregator) {
-            return ((ProfilingAggregator) agg).delegate;
-        }
-        return agg;
+    @Override
+    public Aggregator unwrapAggregator() {
+        return delegate;
     }
 }
