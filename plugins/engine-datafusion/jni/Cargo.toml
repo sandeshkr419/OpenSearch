@@ -20,6 +20,9 @@ arrow = { version = "55.2", features = ["ffi", "ipc_compression"] }
 arrow-array = "55.2.0"
 arrow-schema = "55.2.0"
 arrow-buffer = "55.2.0"
+datafusion-functions-aggregate = { version = "49.0.2" }
+datafusion-physical-expr = "49.0.2"
+datafusion-physical-expr-common = "49.0.2"
 
 # JNI dependencies
 jni = "0.21"

@@ -1,0 +1,102 @@
+# This plan is corrected to perform a PARTIAL `approx_distinct` aggregation.
+# It reads 'index-7', selects the 'message' column, and outputs the HLL sketch.
+extension_uris {
+  extension_uri_anchor: 1
+  uri: "/functions_aggregate_generic.yaml"
+}
+extensions {
+  extension_function {
+    extension_uri_reference: 1
+    function_anchor: 1
+    # CHANGED: Using the approximate distinct function
+    name: "approx_distinct"
+  }
+}
+relations {
+  root {
+    input {
+      aggregate {
+        common {
+          direct {}
+        }
+        input {
+          project {
+            common {
+              direct {}
+            }
+            input {
+              read {
+                common {
+                  direct {}
+                }
+                base_schema {
+                  # Schema for index-7
+                  names: "message"
+                  names: "message3"
+                  names: "message2"
+                  struct {
+                    types {
+                      i64 { nullability: NULLABILITY_NULLABLE }
+                    }
+                    types {
+                      i64 { nullability: NULLABILITY_NULLABLE }
+                    }
+                    types {
+                      i64 { nullability: NULLABILITY_NULLABLE }
+                    }
+                  }
+                }
+                named_table {
+                  names: "index-7"
+                }
+              }
+            }
+            expressions {
+              selection {
+                direct_reference {
+                  struct_field {
+                    # FIXED: Selects the first column ('message')
+                    field: 0
+                  }
+                }
+                root_reference {}
+              }
+            }
+          }
+        }
+        measures {
+          measure {
+            function_reference: 1
+            # CRITICAL CHANGE: This requests the partial HLL state
+            phase: AGGREGATION_PHASE_INITIAL_TO_INTERMEDIATE
+            # CRITICAL CHANGE: The output of a partial state is a binary blob
+            output_type {
+              binary {
+                nullability: NULLABILITY_REQUIRED
+              }
+            }
+            arguments {
+              value {
+                selection {
+                  direct_reference {
+                    struct_field {
+                      # FIXED: Specifies the projected column as the argument
+                      field: 0
+                    }
+                  }
+                  root_reference {}
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    # Name of the output column containing the sketch
+    names: "hll_sketch"
+  }
+}
+version {
+  minor_number: 74
+  producer: "substrait-java"
+}

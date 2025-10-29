@@ -799,4 +799,8 @@ public class DatafusionContext extends SearchContext {
         return dfResults;
     }
 
+    public byte[] getDataFusionSubstraitBytes() {
+        return datafusionQuery.getSubstraitBytes();
+    }
+
 }

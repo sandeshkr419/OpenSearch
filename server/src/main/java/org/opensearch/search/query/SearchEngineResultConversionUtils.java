@@ -26,8 +26,10 @@ public class SearchEngineResultConversionUtils {
     private static final Logger LOGGER = LogManager.getLogger(SearchEngineResultConversionUtils.class);
 
     public static void convertDFResultGeneric(SearchContext searchContext) {
+
         if (searchContext.aggregations() != null) {
             Map<String, Object[]> dfResult = searchContext.getDFResults();
+            System.out.println("hellow" + dfResult.entrySet());
 
             // Create aggregators which will process the result from DataFusion
             try {

@@ -32,8 +32,13 @@ import org.opensearch.index.engine.EngineSearcherSupplier;
 import org.opensearch.index.engine.SearchExecEngine;
 import org.opensearch.index.engine.exec.FileMetadata;
 import org.opensearch.index.shard.ShardPath;
+import org.opensearch.search.SearchService;
 import org.opensearch.search.SearchShardTarget;
+import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.aggregations.SearchResultsCollector;
+import org.opensearch.search.aggregations.metrics.HyperLogLogPlusPlus;
+import org.opensearch.search.aggregations.metrics.InternalCardinality;
+import org.opensearch.search.aggregations.metrics.DataFusionHLLWrapper;
 import org.opensearch.search.internal.ReaderContext;
 import org.opensearch.search.internal.SearchContext;
 import org.opensearch.search.internal.ShardSearchRequest;
@@ -47,6 +52,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 
@@ -159,42 +165,80 @@ public class DatafusionEngine extends SearchExecEngine<DatafusionContext, Datafu
         return false;
     }
 
+//    @Override
+//    public Map<String, Object[]> execute(DatafusionContext context) {
+//        Map<String, Object[]> finalRes = new HashMap<>();
+//        try {
+//            DatafusionSearcher datafusionSearcher = context.getEngineSearcher();
+//            long streamPointer = datafusionSearcher.search(context.getDatafusionQuery(), datafusionService.getTokioRuntimePointer());
+//            RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+//            RecordBatchStream stream = new RecordBatchStream(streamPointer, datafusionService.getTokioRuntimePointer() , allocator);
+//
+//            // We can have some collectors passed like this which can collect the results and convert to InternalAggregation
+//            // Is the possible? need to check
+//
+//            SearchResultsCollector<RecordBatchStream> collector = new SearchResultsCollector<RecordBatchStream>() {
+//                @Override
+//                public void collect(RecordBatchStream value) {
+//                    VectorSchemaRoot root = value.getVectorSchemaRoot();
+//                    for (Field field : root.getSchema().getFields()) {
+//                        String filedName = field.getName();
+//                        FieldVector fieldVector = root.getVector(filedName);
+//                        Object[] fieldValues = new Object[fieldVector.getValueCount()];
+//                        for (int i = 0; i < fieldVector.getValueCount(); i++) {
+//                            fieldValues[i] = fieldVector.getObject(i);
+//                        }
+//                        finalRes.put(filedName, fieldValues);
+//                    }
+//                }
+//            };
+//
+//            while (stream.loadNextBatch().join()) {
+//                collector.collect(stream);
+//            }
+//
+//            logger.info("Final Results:");
+//            for (Map.Entry<String, Object[]> entry : finalRes.entrySet()) {
+//                logger.info("{}: {}", entry.getKey(), java.util.Arrays.toString(entry.getValue()));
+//            }
+//
+//        } catch (Exception exception) {
+//            logger.error("Failed to execute Substrait query plan", exception);
+//        }
+//        return finalRes;
+//    }
+
     @Override
     public Map<String, Object[]> execute(DatafusionContext context) {
         Map<String, Object[]> finalRes = new HashMap<>();
         try {
             DatafusionSearcher datafusionSearcher = context.getEngineSearcher();
-            long streamPointer = datafusionSearcher.search(context.getDatafusionQuery(), datafusionService.getTokioRuntimePointer());
-            RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
-            RecordBatchStream stream = new RecordBatchStream(streamPointer, datafusionService.getTokioRuntimePointer() , allocator);
 
-            // We can have some collectors passed like this which can collect the results and convert to InternalAggregation
-            // Is the possible? need to check
+            byte[] hllSketchBytes = datafusionSearcher.search(
+                    context.getDatafusionQuery(),
+                    datafusionService.getTokioRuntimePointer()
+            );
 
-            SearchResultsCollector<RecordBatchStream> collector = new SearchResultsCollector<RecordBatchStream>() {
-                @Override
-                public void collect(RecordBatchStream value) {
-                    VectorSchemaRoot root = value.getVectorSchemaRoot();
-                    for (Field field : root.getSchema().getFields()) {
-                        String filedName = field.getName();
-                        FieldVector fieldVector = root.getVector(filedName);
-                        Object[] fieldValues = new Object[fieldVector.getValueCount()];
-                        for (int i = 0; i < fieldVector.getValueCount(); i++) {
-                            fieldValues[i] = fieldVector.getObject(i);
-                        }
-                        finalRes.put(filedName, fieldValues);
-                    }
-                }
-            };
-
-            while (stream.loadNextBatch().join()) {
-                collector.collect(stream);
+            if (hllSketchBytes == null || hllSketchBytes.length == 0) {
+                throw new RuntimeException("Rust function returned null or empty sketch");
             }
 
-            logger.info("Final Results:");
-            for (Map.Entry<String, Object[]> entry : finalRes.entrySet()) {
-                logger.info("{}: {}", entry.getKey(), java.util.Arrays.toString(entry.getValue()));
-            }
+            // 1. Create the empty OpenSearch HLL sketch
+            HyperLogLogPlusPlus sketch = DataFusionHLLWrapper.getHyperLogLogPlusPlus(hllSketchBytes);
+
+            logger.info("Successfully merged Rust sketch into OpenSearch HLL object.");
+
+            // 3. Create the final InternalAggregation object
+            InternalAggregation aggregation = new InternalCardinality(
+                    "dis", // Use the name from your PPL query
+                    sketch,
+                    null
+            );
+
+            // 4. Put the final aggregation object into the result map
+            finalRes.put(aggregation.getName(), new Object[]{ aggregation });
+
+            logger.info("Final Results: [InternalCardinality aggregation object]");
 
         } catch (Exception exception) {
             logger.error("Failed to execute Substrait query plan", exception);

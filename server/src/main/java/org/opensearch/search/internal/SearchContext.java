@@ -567,6 +567,10 @@ public abstract class SearchContext implements Releasable {
 
     }
 
+    public byte[] getDataFusionSubstraitBytes() {
+        return null;
+    }
+
     public Map<String, Object[]> getDFResults() {
         return Collections.emptyMap();
     }

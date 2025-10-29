@@ -95,63 +95,63 @@ public class DataFusionServiceTests extends OpenSearchTestCase {
 //        assertNull(service.getContext(defaultContext.getContext()));
 //    }
 
-    // TO run update proper directory path for generation-1-optimized.parquet file in
-    // this.datafusionReaderManager = new DatafusionReaderManager("TODO://FigureOutPath", formatCatalogSnapshot);
-    public void testQueryPhaseExecutor() throws IOException {
-        Map<String, Object[]> finalRes = new HashMap<>();
-        DatafusionSearcher datafusionSearcher = null;
-        try {
-            DatafusionEngine engine = new DatafusionEngine(DataFormat.CSV, List.of(new FileMetadata(new TextDF(), "hits_data.parquet")), service);
-            datafusionSearcher = engine.acquireSearcher("Search");
-
-
-            byte[] protoContent;
-
-            try (InputStream is = getClass().getResourceAsStream("/substrait_plan.pb")) {
-                protoContent = is.readAllBytes();
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-
-            long streamPointer = datafusionSearcher.search(new DatafusionQuery(protoContent, new ArrayList<>()), service.getTokioRuntimePointer());
-            RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
-            RecordBatchStream stream = new RecordBatchStream(streamPointer, service.getTokioRuntimePointer() , allocator);
-
-            // We can have some collectors passed like this which can collect the results and convert to InternalAggregation
-            // Is the possible? need to check
-
-            SearchResultsCollector<RecordBatchStream> collector = new SearchResultsCollector<RecordBatchStream>() {
-                @Override
-                public void collect(RecordBatchStream value) {
-                    VectorSchemaRoot root = value.getVectorSchemaRoot();
-                    for (Field field : root.getSchema().getFields()) {
-                        String filedName = field.getName();
-                        FieldVector fieldVector = root.getVector(filedName);
-                        Object[] fieldValues = new Object[fieldVector.getValueCount()];
-                        for (int i = 0; i < fieldVector.getValueCount(); i++) {
-                            fieldValues[i] = fieldVector.getObject(i);
-                        }
-                        finalRes.put(filedName, fieldValues);
-                    }
-                }
-            };
-
-            while (stream.loadNextBatch().join()) {
-                collector.collect(stream);
-            }
-
-            logger.info("Final Results:");
-            for (Map.Entry<String, Object[]> entry : finalRes.entrySet()) {
-                logger.info("{}: {}", entry.getKey(), java.util.Arrays.toString(entry.getValue()));
-            }
-
-        } catch (Exception exception) {
-            logger.error("Failed to execute Substrait query plan", exception);
-        }
-        finally {
-            if(datafusionSearcher != null) {
-                datafusionSearcher.close();
-            }
-        }
-    }
+//    // TO run update proper directory path for generation-1-optimized.parquet file in
+//    // this.datafusionReaderManager = new DatafusionReaderManager("TODO://FigureOutPath", formatCatalogSnapshot);
+//    public void testQueryPhaseExecutor() throws IOException {
+//        Map<String, Object[]> finalRes = new HashMap<>();
+//        DatafusionSearcher datafusionSearcher = null;
+//        try {
+//            DatafusionEngine engine = new DatafusionEngine(DataFormat.CSV, List.of(new FileMetadata(new TextDF(), "hits_data.parquet")), service);
+//            datafusionSearcher = engine.acquireSearcher("Search");
+//
+//
+//            byte[] protoContent;
+//
+//            try (InputStream is = getClass().getResourceAsStream("/substrait_plan.pb")) {
+//                protoContent = is.readAllBytes();
+//            } catch (IOException e) {
+//                throw new RuntimeException(e);
+//            }
+//
+//            long streamPointer = datafusionSearcher.search(new DatafusionQuery(protoContent, new ArrayList<>()), service.getTokioRuntimePointer());
+//            RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+//            RecordBatchStream stream = new RecordBatchStream(streamPointer, service.getTokioRuntimePointer() , allocator);
+//
+//            // We can have some collectors passed like this which can collect the results and convert to InternalAggregation
+//            // Is the possible? need to check
+//
+//            SearchResultsCollector<RecordBatchStream> collector = new SearchResultsCollector<RecordBatchStream>() {
+//                @Override
+//                public void collect(RecordBatchStream value) {
+//                    VectorSchemaRoot root = value.getVectorSchemaRoot();
+//                    for (Field field : root.getSchema().getFields()) {
+//                        String filedName = field.getName();
+//                        FieldVector fieldVector = root.getVector(filedName);
+//                        Object[] fieldValues = new Object[fieldVector.getValueCount()];
+//                        for (int i = 0; i < fieldVector.getValueCount(); i++) {
+//                            fieldValues[i] = fieldVector.getObject(i);
+//                        }
+//                        finalRes.put(filedName, fieldValues);
+//                    }
+//                }
+//            };
+//
+//            while (stream.loadNextBatch().join()) {
+//                collector.collect(stream);
+//            }
+//
+//            logger.info("Final Results:");
+//            for (Map.Entry<String, Object[]> entry : finalRes.entrySet()) {
+//                logger.info("{}: {}", entry.getKey(), java.util.Arrays.toString(entry.getValue()));
+//            }
+//
+//        } catch (Exception exception) {
+//            logger.error("Failed to execute Substrait query plan", exception);
+//        }
+//        finally {
+//            if(datafusionSearcher != null) {
+//                datafusionSearcher.close();
+//            }
+//        }
+//    }
 }

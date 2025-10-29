@@ -32,7 +32,7 @@ public interface EngineSearcher<Q,C> extends Releasable {
         throw new UnsupportedOperationException();
     }
 
-    default long search(Q query, Long runtimePtr) throws IOException {
+    default byte[] search(Q query, Long runtimePtr) throws IOException {
         throw new UnsupportedOperationException();
     }
 }
