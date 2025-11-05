@@ -13,10 +13,12 @@ crate-type = ["cdylib"]
 # DataFusion dependencies
 datafusion = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-functions-aggregate = { version = "49.0.2" }
+datafusion-physical-expr = { version = "49.0.2" }
+datafusion-physical-expr-common = { version = "49.0.2" }
 datafusion-datasource = { workspace = true }
 arrow-json = { workspace = true }
 arrow = { workspace = true }
-#arrow = "55.2.0"
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-buffer = { workspace = true }

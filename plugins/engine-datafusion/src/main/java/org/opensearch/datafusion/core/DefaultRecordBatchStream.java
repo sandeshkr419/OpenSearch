@@ -36,6 +36,12 @@ public class DefaultRecordBatchStream implements RecordBatchStream {
         logger.debug("Created default record batch stream with pointer: {}", nativeStreamPtr);
     }
 
+
+    public DefaultRecordBatchStream(byte[] nativeStreamPtr) {
+        this.nativeStreamPtr = 0L;
+        logger.debug("Created default record batch stream with pointer: {}", nativeStreamPtr);
+    }
+
     @Override
     public Object getSchema() {
         return "schema"; // Placeholder

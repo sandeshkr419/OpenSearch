@@ -10,6 +10,7 @@ package org.opensearch.datafusion;
 
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.FieldVector;
+import org.apache.arrow.vector.VarBinaryVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.logging.log4j.LogManager;
@@ -32,8 +33,13 @@ import org.opensearch.index.engine.EngineSearcherSupplier;
 import org.opensearch.index.engine.SearchExecEngine;
 import org.opensearch.index.engine.exec.FileMetadata;
 import org.opensearch.index.shard.ShardPath;
+import org.opensearch.search.SearchService;
 import org.opensearch.search.SearchShardTarget;
+import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.aggregations.SearchResultsCollector;
+import org.opensearch.search.aggregations.metrics.HyperLogLogPlusPlus;
+import org.opensearch.search.aggregations.metrics.InternalCardinality;
+import org.opensearch.search.aggregations.metrics.DataFusionHLLWrapper;
 import org.opensearch.search.internal.ReaderContext;
 import org.opensearch.search.internal.SearchContext;
 import org.opensearch.search.internal.ShardSearchRequest;
@@ -47,6 +53,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 
@@ -173,6 +180,8 @@ public class DatafusionEngine extends SearchExecEngine<DatafusionContext, Datafu
             // We can have some collectors passed like this which can collect the results and convert to InternalAggregation
             // Is the possible? need to check
 
+
+
             SearchResultsCollector<RecordBatchStream> collector = new SearchResultsCollector<RecordBatchStream>() {
                 @Override
                 public void collect(RecordBatchStream value) {
@@ -180,6 +189,17 @@ public class DatafusionEngine extends SearchExecEngine<DatafusionContext, Datafu
                     for (Field field : root.getSchema().getFields()) {
                         String filedName = field.getName();
                         FieldVector fieldVector = root.getVector(filedName);
+                        if (fieldVector instanceof VarBinaryVector vbv) {
+                            byte[] hllSketchBytes = vbv.getObject(0);
+                            HyperLogLogPlusPlus sketch = DataFusionHLLWrapper.getHyperLogLogPlusPlus(hllSketchBytes);
+                            InternalAggregation aggregation = new InternalCardinality(
+                                    "dis",
+                                    sketch,
+                                    null
+                            );
+                            finalRes.put(aggregation.getName(), new Object[]{ aggregation });
+                            continue;
+                        }
                         Object[] fieldValues = new Object[fieldVector.getValueCount()];
                         for (int i = 0; i < fieldVector.getValueCount(); i++) {
                             fieldValues[i] = fieldVector.getObject(i);
@@ -193,10 +213,10 @@ public class DatafusionEngine extends SearchExecEngine<DatafusionContext, Datafu
                 collector.collect(stream);
             }
 
-//            logger.info("Final Results:");
-//            for (Map.Entry<String, Object[]> entry : finalRes.entrySet()) {
-//                logger.info("{}: {}", entry.getKey(), java.util.Arrays.toString(entry.getValue()));
-//            }
+            logger.info("Final Results:");
+            for (Map.Entry<String, Object[]> entry : finalRes.entrySet()) {
+                logger.info("{}: {}", entry.getKey(), java.util.Arrays.toString(entry.getValue()));
+            }
 
         } catch (Exception exception) {
             logger.error("Failed to execute Substrait query plan", exception);
@@ -209,5 +229,57 @@ public class DatafusionEngine extends SearchExecEngine<DatafusionContext, Datafu
             }
         }
         return finalRes;
+    }
+
+//    public Map<String, Object[]> execute1(DatafusionContext context) {
+//        Map<String, Object[]> finalRes = new HashMap<>();
+//        try {
+//            DatafusionSearcher datafusionSearcher = context.getEngineSearcher();
+//
+//            byte[] hllSketchBytes = datafusionSearcher.search(
+//                    context.getDatafusionQuery(),
+//                    datafusionService.getTokioRuntimePointer()
+//            );
+//
+//            if (hllSketchBytes == null || hllSketchBytes.length == 0) {
+//                throw new RuntimeException("Rust function returned null or empty sketch");
+//            }
+//
+//
+//            // 1. Create the empty OpenSearch HLL sketch
+//            HyperLogLogPlusPlus sketch = DataFusionHLLWrapper.getHyperLogLogPlusPlus(hllSketchBytes);
+//
+//            logger.info("Successfully merged Rust sketch into OpenSearch HLL object.");
+//
+//            // 3. Create the final InternalAggregation object
+//            InternalAggregation aggregation = new InternalCardinality(
+//                    "dis", // Use the name from your PPL query
+//                    sketch,
+//                    null
+//            );
+//
+//            // 4. Put the final aggregation object into the result map
+//            finalRes.put(aggregation.getName(), new Object[]{ aggregation });
+//
+//            logger.info("Final Results: [InternalCardinality aggregation object]");
+//
+//        } catch (Exception exception) {
+//            logger.error("Failed to execute Substrait query plan", exception);
+//        }
+//        return finalRes;
+//    }
+
+    private static Object getObject(FieldVector fieldVector) {
+        if (fieldVector instanceof VarBinaryVector vbv) {
+            byte[] hllSketchBytes = vbv.getObject(0);
+            HyperLogLogPlusPlus sketch = DataFusionHLLWrapper.getHyperLogLogPlusPlus(hllSketchBytes);
+            InternalAggregation aggregation = new InternalCardinality(
+                    fieldVector.getName(),
+                    sketch,
+                    null
+            );
+            return aggregation;
+        }
+        return fieldVector.getObject(0);
     }
 }

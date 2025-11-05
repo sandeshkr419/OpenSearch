@@ -818,4 +818,8 @@ public class DatafusionContext extends SearchContext {
                 throw new IllegalArgumentException("Conversion to Comparable not supported for type " + rawValue.getClass());
         };
     }
+
+    public byte[] getDataFusionSubstraitBytes() {
+        return datafusionQuery.getSubstraitBytes();
+    }
 }

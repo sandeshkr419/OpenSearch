@@ -850,7 +850,7 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
             //context.aggregations(context1.aggregations());
             // TODO Execute plan here
             // TODO : figure out how to tie this
-            byte[] substraitQuery = request.source().queryPlanIR();
+            byte[] substraitQuery = context.getDataFusionSubstraitBytes();
             if (substraitQuery != null) {
                 Map<String, Object[]> result = searchExecEngine.execute(context);
                 context.setDFResults(result);

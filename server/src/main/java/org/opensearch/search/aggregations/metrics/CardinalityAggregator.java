@@ -68,12 +68,16 @@ import org.opensearch.index.fielddata.SortedNumericDoubleValues;
 import org.opensearch.search.aggregations.Aggregator;
 import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.aggregations.LeafBucketCollector;
+import org.opensearch.search.aggregations.ShardResultConvertor;
 import org.opensearch.search.aggregations.support.ValuesSource;
 import org.opensearch.search.aggregations.support.ValuesSourceConfig;
 import org.opensearch.search.internal.SearchContext;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.BiConsumer;
 
@@ -84,7 +88,7 @@ import static org.opensearch.search.SearchService.CARDINALITY_AGGREGATION_PRUNIN
  *
  * @opensearch.internal
  */
-public class CardinalityAggregator extends NumericMetricsAggregator.SingleValue {
+public class CardinalityAggregator extends NumericMetricsAggregator.SingleValue implements ShardResultConvertor {
 
     private static final Logger logger = LogManager.getLogger(CardinalityAggregator.class);
 
@@ -760,5 +764,18 @@ public class CardinalityAggregator extends NumericMetricsAggregator.SingleValue 
                 return hash.h1;
             }
         }
+    }
+
+    /**
+     * Converts the shard-level result map from the DataFusion engine
+     * into InternalAggregation object for the relevant row.
+     *
+     * @param shardResult The map produced by the DataFusionEngine's execute method.
+     * For cardinality, this map contains the fully formed InternalCardinality object.
+     * @return A list containing the InternalAggregation from the shard result.
+     */
+    @Override
+    public InternalAggregation convertRow(Map<String, Object[]> shardResult, int row, SearchContext searchContext) {
+        return (InternalAggregation) shardResult.get(this.name)[row];
     }
 }
