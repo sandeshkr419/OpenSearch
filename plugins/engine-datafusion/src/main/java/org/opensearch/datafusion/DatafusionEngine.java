@@ -231,44 +231,6 @@ public class DatafusionEngine extends SearchExecEngine<DatafusionContext, Datafu
         return finalRes;
     }
 
-//    public Map<String, Object[]> execute1(DatafusionContext context) {
-//        Map<String, Object[]> finalRes = new HashMap<>();
-//        try {
-//            DatafusionSearcher datafusionSearcher = context.getEngineSearcher();
-//
-//            byte[] hllSketchBytes = datafusionSearcher.search(
-//                    context.getDatafusionQuery(),
-//                    datafusionService.getTokioRuntimePointer()
-//            );
-//
-//            if (hllSketchBytes == null || hllSketchBytes.length == 0) {
-//                throw new RuntimeException("Rust function returned null or empty sketch");
-//            }
-//
-//
-//            // 1. Create the empty OpenSearch HLL sketch
-//            HyperLogLogPlusPlus sketch = DataFusionHLLWrapper.getHyperLogLogPlusPlus(hllSketchBytes);
-//
-//            logger.info("Successfully merged Rust sketch into OpenSearch HLL object.");
-//
-//            // 3. Create the final InternalAggregation object
-//            InternalAggregation aggregation = new InternalCardinality(
-//                    "dis", // Use the name from your PPL query
-//                    sketch,
-//                    null
-//            );
-//
-//            // 4. Put the final aggregation object into the result map
-//            finalRes.put(aggregation.getName(), new Object[]{ aggregation });
-//
-//            logger.info("Final Results: [InternalCardinality aggregation object]");
-//
-//        } catch (Exception exception) {
-//            logger.error("Failed to execute Substrait query plan", exception);
-//        }
-//        return finalRes;
-//    }
-
     private static Object getObject(FieldVector fieldVector) {
         if (fieldVector instanceof VarBinaryVector vbv) {
             byte[] hllSketchBytes = vbv.getObject(0);

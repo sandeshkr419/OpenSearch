@@ -7,15 +7,14 @@
  */
 use arrow_array::ffi::FFI_ArrowArray;
 use arrow_schema::ffi::FFI_ArrowSchema;
+use jni::objects::{JByteArray, JClass, JObject};
 use jni::sys::{jbyteArray, jlong, jstring};
 use jni::JNIEnv;
+use std::ptr::addr_of_mut;
 use std::sync::Arc;
 use std::time::Instant;
-// std imports
-use std::ptr::{addr_of_mut, null_mut}; // Needed for FFI helpers
-
-// jni imports
-use jni::objects::{JByteArray, JClass, JObject, JObjectArray, JString};
+use arrow::datatypes::Schema;
+use arrow_schema::{Field, DataType};
 
 // arrow imports
 use arrow_array::{Array, BinaryArray, StructArray};
@@ -28,6 +27,7 @@ mod listing_table;
 
 // ++ DataFusion Imports ++
 use datafusion::error::{DataFusionError, Result};
+use datafusion_expr::expr::Alias;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use datafusion::physical_expr::PhysicalExpr;
@@ -35,6 +35,10 @@ use datafusion::physical_plan::expressions::col as phys_col;
 use datafusion_functions_aggregate::approx_distinct::ApproxDistinct;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_expr::expressions::Column as PhysicalColumn;
+use datafusion_datasource::source::DataSourceExec;
+use datafusion::catalog::TableProvider;
+// use datafusion::physical_plan::display::DisplayableExecutionPlan;
+// use datafusion::physical_plan::planner::PhysicalPlanner;
 
 use crate::listing_table::{ListingOptions, ListingTable, ListingTableConfig};
 use crate::util::{create_object_meta_from_filenames, parse_string_arr, set_object_result_error, set_object_result_ok};
@@ -43,6 +47,8 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr}; // Import the builder AND the struct it builds
 use datafusion_expr::AggregateUDF;
+use datafusion::functions_aggregate::count::Count;
+// use datafusion::physical_expr::aggregates::AggregateExpr;
 
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::cache::cache_manager::CacheManagerConfig;
@@ -55,9 +61,24 @@ use datafusion::DATAFUSION_VERSION;
 use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
 use datafusion_substrait::substrait::proto::Plan;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
+use datafusion::logical_expr::utils as logical_utils;
+
+use datafusion::logical_expr::expr::AggregateFunction;
+use datafusion::logical_expr::expr::AggregateFunctionParams;
+use datafusion_common::{tree_node::{TreeNode, Transformed}};
+use datafusion_expr::{
+    logical_plan::LogicalPlan,
+    logical_plan::Aggregate,
+    Expr,
+    expr::{AggregateFunction as AggFnExpr}
+};
+use datafusion::functions_aggregate::expr_fn as agg_expr_fn;
+use datafusion::optimizer::Analyzer;
 
 use futures::TryStreamExt;
+use jni::objects::{JObjectArray, JString};
 use object_store::ObjectMeta;
+use prost::Message;
 use tokio::runtime::Runtime;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -65,7 +86,8 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-// --- JNI Functions (Placeholders + ShardView ---
+
+/// Create a new DataFusion session context
 #[no_mangle]
 pub extern "system" fn Java_org_opensearch_datafusion_DataFusionQueryJNI_createContext(
     _env: JNIEnv,
@@ -96,6 +118,134 @@ pub extern "system" fn Java_org_opensearch_datafusion_DataFusionQueryJNI_getVers
     let version_info = format!(r#"{{"version": "{}", "codecs": ["CsvDataSourceCodec"]}}"#, DATAFUSION_VERSION);
     env.new_string(version_info).expect("Couldn't create Java string").as_raw()
 }
+
+pub fn extract_partial_aggregate(plan: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+    // Try downcasting to AggregateExec
+    if let Some(agg_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
+        println!(
+            "[PartialAggOptimizer] Found AggregateExec: mode={:?}, group_expr={:?}, aggr_expr={:?}",
+            agg_exec.mode(),
+            agg_exec.group_expr(),
+            agg_exec.aggr_expr()
+        );
+
+        // Recursively fix input first
+        let new_input = extract_partial_aggregate(agg_exec.input().clone());
+
+        // Process aggregate expressions
+        let mut new_aggr_exprs: Vec<Arc<AggregateFunctionExpr>> = Vec::new();
+
+        for expr in agg_exec.aggr_expr() {
+            let func_name = expr.fun().name().to_uppercase();
+            println!(
+                "[PartialAggOptimizer] Processing aggregate function: {}",
+                func_name
+            );
+
+            // Replace COUNT with ApproxDistinct HLL for partial aggregation
+            if func_name == "COUNT" {
+                println!("[PartialAggOptimizer] Replacing COUNT with ApproxDistinct HLL UDAF");
+
+                // Create ApproxDistinct UDAF
+                let agg_udf = Arc::new(AggregateUDF::new_from_impl(ApproxDistinct::new()));
+
+                // Keep a distinct name for partial HLL
+                let alias_name = format!("{}[hll_registers]", expr.name());
+
+                // HLL produces Binary type
+                let field = Field::new(&alias_name, DataType::Binary, false);
+                let schema = Arc::new(Schema::new(vec![field.clone()]));
+
+                // Build new AggregateFunctionExpr
+                let new_expr_result = AggregateExprBuilder::new(agg_udf.clone(), expr.expressions().to_vec())
+                    .alias(alias_name.clone())
+                    .schema(schema.clone())
+                    .build();
+
+                match new_expr_result {
+                    Ok(new_expr) => {
+                        println!(
+                            "[PartialAggOptimizer] Created new AggregateFunctionExpr: {:?}",
+                            new_expr
+                        );
+                        new_aggr_exprs.push(Arc::new(new_expr));
+                    }
+                    Err(e) => {
+                        println!(
+                            "[PartialAggOptimizer] FAILED to build new HLL agg expr: {}. Keeping original.",
+                            e
+                        );
+                        new_aggr_exprs.push(expr.clone());
+                    }
+                }
+            } else {
+                // Keep other aggregates as-is
+                new_aggr_exprs.push(expr.clone());
+            }
+        }
+
+        // Build new PhysicalGroupBy for group expressions
+        let new_group_exprs = agg_exec.group_expr().clone();
+        println!(
+            "[PartialAggOptimizer] Group expressions: {:?}",
+            new_group_exprs
+        );
+
+        // Build schema from new expressions
+        let new_schema = Arc::new(Schema::new(
+            new_aggr_exprs
+                .iter()
+                .map(|e| (*e.field()).clone())
+                .collect::<Vec<Field>>(),
+        ));
+        println!("[PartialAggOptimizer] New schema: {:?}", new_schema);
+
+        // Create the new AggregateExec in Partial mode
+        let new_agg_exec = AggregateExec::try_new(
+            AggregateMode::Partial,
+            new_group_exprs,
+            new_aggr_exprs,
+            agg_exec.filter_expr().to_vec(),
+            new_input,
+            new_schema,
+        )
+            .expect("[PartialAggOptimizer] Failed to create AggregateExec");
+
+        println!(
+            "[PartialAggOptimizer] Created new AggregateExec in Partial mode: {:?}",
+            new_agg_exec
+        );
+
+        Arc::new(new_agg_exec)
+    } else {
+        // Recurse into children of non-aggregate nodes
+        println!(
+            "[PartialAggOptimizer] Recurse into children of node: {}",
+            plan.name()
+        );
+
+        let new_children = plan
+            .children()
+            .into_iter()
+            .map(|child| extract_partial_aggregate(child.clone()))
+            .collect::<Vec<_>>();
+
+        let plan_with_children = plan.clone().with_new_children(new_children);
+
+        match plan_with_children {
+            Ok(new_plan) => new_plan,
+            Err(e) => {
+                println!(
+                    "[PartialAggOptimizer] ERROR in with_new_children for {}: {}. Returning original.",
+                    plan.name(),
+                    e
+                );
+                plan
+            }
+        }
+    }
+}
+
 
 /// Get version information (legacy method name)
 #[no_mangle]
@@ -183,6 +333,7 @@ pub extern "system" fn Java_org_opensearch_datafusion_DataFusionQueryJNI_createD
     let shard_view = ShardView::new(table_path, files_meta);
     Box::into_raw(Box::new(shard_view)) as jlong
 }
+
 #[no_mangle]
 pub extern "system" fn Java_org_opensearch_datafusion_DataFusionQueryJNI_destroyReader(
     mut env: JNIEnv,
@@ -220,122 +371,281 @@ pub extern "system" fn Java_org_opensearch_datafusion_DataFusionQueryJNI_execute
     mut env: JNIEnv,
     _class: JClass,
     shard_view_ptr: jlong,
-    _substrait_bytes: jbyteArray,
+    table_name: JString,
+    substrait_bytes: jbyteArray,
     tokio_runtime_env_ptr: jlong,
+    // callback: JObject,
 ) -> jlong {
+    let overall = Instant::now();
+    let shard_view = unsafe { &*(shard_view_ptr as *const ShardView) };
+    let runtime_ptr = unsafe { &*(tokio_runtime_env_ptr as *const Runtime)};
+    let table_name: String = env.get_string(&table_name).expect("Couldn't get java string!").into();
 
-    // Wrap the main logic in a panic-safe block
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if shard_view_ptr == 0 || tokio_runtime_env_ptr == 0 {
-            let _ = env.throw_new("java/lang/RuntimeException", "Rust received null pointer for ShardView or Tokio Runtime");
-            return 0; // <-- CHANGE 2: Return 0 on error
-        }
+    let table_path = shard_view.table_path();
+    let files_meta = shard_view.files_meta();
 
-        let shard_view = unsafe { &*(shard_view_ptr as *const ShardView) };
-        let runtime = unsafe { &*(tokio_runtime_env_ptr as *const Runtime) };
+    println!("Table path: {}", table_path);
+    println!("Files: {:?}", files_meta);
 
-        let table_path = shard_view.table_path();
-        let files_meta = shard_view.files_meta();
+    let list_file_cache = Arc::new(DefaultListFilesCache::default());
+    list_file_cache.put(table_path.prefix(), files_meta);
 
-        println!("[RUST] executeSubstraitQuery (Hardcoded Partial Agg -> Stream Ptr)");
-        // ... (Setup code for table_path, files_meta, list_file_cache remains the same) ...
-        // ... (RuntimeEnvBuilder code remains the same) ...
-        // ... (SessionConfig and SessionStateBuilder remain the same) ...
+    let runtime_env = RuntimeEnvBuilder::new()
+        .with_cache_manager(CacheManagerConfig::default()
+            .with_list_files_cache(Some(list_file_cache.clone()))
+        ).build().unwrap();
 
-        // --- REPEAT INITIAL SETUP FOR CONTEXT (Abbreviated for brevity in diff, keep your actual code here) ---
-        let list_file_cache = Arc::new(DefaultListFilesCache::default());
-        list_file_cache.put(table_path.prefix(), files_meta);
-        let runtime_env = RuntimeEnvBuilder::new()
-            .with_cache_manager(CacheManagerConfig::default().with_list_files_cache(Some(list_file_cache.clone())))
-            .build().unwrap(); // Simplified unwrap for brevity here, keep your error handling if you prefer
-        let config = SessionConfig::new();
-        let state = datafusion::execution::SessionStateBuilder::new().with_config(config).with_runtime_env(Arc::new(runtime_env)).with_default_features().build();
-        let ctx = SessionContext::new_with_state(state);
-        // -----------------------------------------------------------------------------------------
+    // TODO: get config from CSV DataFormat
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.parquet.pushdown_filters = true;
+    config.options_mut().execution.target_partitions = 1;
 
-        // ... (Table registration code remains the same) ...
-        // ** DEBUG: Manually register table here for testing **
-        let register_result: core::result::Result<(), String> = runtime.block_on(async {
-            // ... (keep your exact existing table registration logic here) ...
-            let file_format = ParquetFormat::new();
-            let listing_options = ListingOptions::new(Arc::new(file_format)).with_file_extension(".parquet");
-            let resolved_schema = listing_options.infer_schema(&ctx.state(), &table_path).await.map_err(|e| e.to_string())?;
-            let config = ListingTableConfig::new(table_path).with_listing_options(listing_options).with_schema(resolved_schema);
-            let provider = Arc::new(ListingTable::try_new(config).map_err(|e| e.to_string())?);
-            ctx.register_table("index-7", provider).map_err(|e| e.to_string())?;
-            Ok(())
-        });
-        if let Err(e) = register_result {
-            let _ = env.throw_new("java/lang/RuntimeException", e);
+    let state = datafusion::execution::SessionStateBuilder::new()
+        .with_config(config)
+        .with_runtime_env(Arc::from(runtime_env))
+        .with_default_features()
+        // .with_optimizer_rule(Arc::new(OptimizeRowId))
+        // .with_physical_optimizer_rule(Arc::new(FilterRowIdOptimizer)) // TODO: enable only for query phase
+        .build();
+
+    let ctx = SessionContext::new_with_state(state);
+
+    // Create default parquet options
+    let file_format = ParquetFormat::new();
+    let listing_options = ListingOptions::new(Arc::new(file_format))
+        .with_file_extension(".parquet"); // TODO: take this as parameter
+    // .with_table_partition_cols(vec![("row_base".to_string(), DataType::Int32)]); // TODO: enable only for query phase
+
+    // Ideally the executor will give this
+    runtime_ptr.block_on(async {
+        let resolved_schema = listing_options
+            .infer_schema(&ctx.state(), &table_path.clone())
+            .await.unwrap();
+
+
+        let config = ListingTableConfig::new(table_path.clone())
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+
+        // Create a new TableProvider
+        let provider = Arc::new(ListingTable::try_new(config).unwrap());
+        let shard_id = table_path.prefix().filename().expect("error in fetching Path");
+        ctx.register_table(table_name, provider)
+            .expect("Failed to attach the Table");
+
+    });
+
+    let start = Instant::now();
+    // TODO : how to close ctx ?
+    // Convert Java byte array to Rust Vec<u8>
+    let plan_bytes_obj = unsafe { JByteArray::from_raw(substrait_bytes) };
+    let plan_bytes_vec = match env.convert_byte_array(plan_bytes_obj) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            let error_msg = format!("Failed to convert plan bytes: {}", e);
+            env.throw_new("java/lang/Exception", error_msg);
             return 0;
         }
+    };
 
-        // --- Main Execution Logic ---
-        // CHANGE 3: Return type of block_on is now Result<jlong, DataFusionError>
-        let stream_ptr_result: Result<jlong, DataFusionError> = runtime.block_on(async {
-            println!("[RUST] 1. Looking up table 'index-7'...");
-            let df = ctx.table("index-7").await?;
-
-            // ... (Keep steps 2 through 8 exactly the same to build 'final_plan') ...
-            // [RUST] 2. Creating physical plan...
-            let scan_phys_plan = ctx.state().create_physical_plan(df.logical_plan()).await?;
-            let scan_schema = scan_phys_plan.schema();
-            // [RUST] 3. Finding index for 'message'...
-            let message_index = scan_schema.index_of("message")?;
-            // [RUST] 4. Creating ProjectionExec...
-            let projection_exprs = vec![(Arc::new(PhysicalColumn::new("message", message_index)) as Arc<dyn PhysicalExpr>, "message".to_string())];
-            let projection_exec = Arc::new(ProjectionExec::try_new(projection_exprs, scan_phys_plan)?);
-            let projected_schema = projection_exec.schema();
-            // [RUST] 5. Creating aggregate UDF...
-            let udaf_impl = ApproxDistinct::new();
-            let agg_udf = Arc::new(AggregateUDF::new_from_impl(udaf_impl));
-            let args_phys = vec![phys_col("message", &projected_schema)?];
-            // [RUST] 6. Building AggregateExpr...
-            let agg_expr_struct = AggregateExprBuilder::new(agg_udf, args_phys).schema(projected_schema.clone()).alias("hll_sketch_internal".to_string()).build()?;
-            let agg_expr_arc = Arc::new(agg_expr_struct);
-            // [RUST] 7. Creating Partial AggregateExec...
-            let partial_agg_exec = Arc::new(AggregateExec::try_new(AggregateMode::Partial, PhysicalGroupBy::default(), vec![agg_expr_arc], vec![None], projection_exec, projected_schema.clone())?) as Arc<dyn ExecutionPlan>;
-            // [RUST] 8. Creating final ProjectionExec for renaming...
-            let final_schema = partial_agg_exec.schema();
-            let intermediate_name = final_schema.field(0).name();
-            let rename_exprs = vec![(phys_col(intermediate_name, &final_schema)?, "hll_sketch".to_string())];
-            let final_plan = Arc::new(ProjectionExec::try_new(rename_exprs, partial_agg_exec)?) as Arc<dyn ExecutionPlan>;
+    let substrait_plan = match Plan::decode(plan_bytes_vec.as_slice()) {
+        Ok(plan) => {
+            // println!("SUBSTRAIT rust: Decoding is successful, Plan has {} relations", plan.relations.len());
+            plan
+        },
+        Err(e) => {
+            return 0;
+        }
+    };
 
 
-            // --- CHANGE 4: Execute stream, but DO NOT collect. Return pointer. ---
-            println!("[RUST] 9. Executing physical plan to get stream...");
-            let task_ctx = ctx.task_ctx();
-            // execute() returns Result<SendableRecordBatchStream>
-            let stream = final_plan.execute(0, task_ctx)?;
+    //let runtime = unsafe { &mut *(runtime_ptr as *mut Runtime) };
+    runtime_ptr.block_on(async {
 
-            println!("[RUST] 10. Boxing stream and returning pointer.");
-            // Box the stream and convert to raw pointer for Java
-            let stream_ptr = Box::into_raw(Box::new(stream)) as jlong;
-
-            Ok(stream_ptr)
-        });
-
-        match stream_ptr_result {
-            Ok(ptr) => {
-                println!("[RUST] Success. Returning stream pointer: {}", ptr);
-                ptr
-            }
+        let logical_plan = match from_substrait_plan(&ctx.state(), &substrait_plan).await {
+            Ok(plan) => {
+                // println!("SUBSTRAIT Rust: LogicalPlan: {:?}", plan);
+                let duration = start.elapsed();
+                println!("Rust: Substrait decoding time in milliseconds: {}", duration.as_millis());
+                plan
+            },
             Err(e) => {
-                println!("[RUST] Error during plan setup: {}", e);
-                let _ = env.throw_new("java/lang/RuntimeException", format!("Failed to create stream: {}", e));
-                0
+                println!("SUBSTRAIT Rust: Failed to convert Substrait plan: {}", e);
+                return 0;
             }
-        }
-    }));
+        };
 
-    match result {
-        Ok(ptr) => ptr,
-        Err(_) => {
-            println!("[RUST] PANIC caught!");
-            let _ = env.throw_new("java/lang/RuntimeException", "Rust native code panicked!");
-            0
+        println!("Logical plan (old): {}", logical_plan.to_string());
+        let new_logical_plan = rewrite_count_to_approx_distinct(&ctx, &logical_plan).unwrap();
+        println!("Logical plan (new): {}", new_logical_plan.to_string());
+
+        let physical_plan = ctx.state().create_physical_plan(&logical_plan).await.unwrap();
+        println!("Physical plan: {}", datafusion::physical_plan::displayable(physical_plan.as_ref()).indent(true));
+
+
+
+        // let other_physical_plan = match ctx.state().create_physical_plan(&new_logical_plan).await {
+        //     Ok(plan) => plan,
+        //     Err(e) => {
+        //         println!("Failed to create physical plan: {}", e);
+        //         return 0;
+        //     }
+        // };
+        println!("Other Physical plan: {}", datafusion::physical_plan::displayable(physical_plan.as_ref()).indent(true));
+
+        let partial_plan = extract_partial_aggregate(physical_plan);
+        println!("Modified plan (partial): {}", datafusion::physical_plan::displayable(partial_plan.as_ref()).indent(true));
+
+
+
+        // Execute the plan
+        let task_ctx = ctx.task_ctx();
+        let stream = partial_plan.execute(0, task_ctx).unwrap();
+
+        // let dataframe = ctx.execute_logical_plan(logical_plan).await.unwrap();
+        // let stream = dataframe.execute_stream().await.unwrap();
+        let stream_ptr = Box::into_raw(Box::new(stream)) as jlong;
+        // println!("The memory used currently right now: {:?}", jemalloc_stats::refresh_allocated());
+        let duration1 = overall.elapsed();
+        println!("Rust: Overall query setup time in milliseconds: {}", duration1.as_millis());
+
+        stream_ptr
+    })
+}
+
+pub fn rewrite_count_to_approx_distinct(
+    ctx: &SessionContext,
+    plan: &LogicalPlan,
+) -> Result<LogicalPlan, DataFusionError> {
+    // 1) Walk the logical plan and rewrite Aggregate nodes
+    let transformed = plan.clone().transform_up(&|node| match node {
+        LogicalPlan::Aggregate(agg) => {
+            let new_aggr_exprs: Result<Vec<Expr>, DataFusionError> = agg
+                .aggr_expr
+                .iter()
+                .map(|expr| match expr {
+                    Expr::AggregateFunction(af) if af.func.name() == "count" => {
+                        // Build AggregateUDF for approx_distinct
+                        let udf_impl = ApproxDistinct::new(); // Your implementation
+                        let udf = Arc::new(AggregateUDF::new_from_impl(udf_impl));
+
+                        // Extract params
+                        let params = &af.params;
+
+                        // Create new AggregateFunction
+                        let new_func = AggregateFunction::new_udf(
+                            udf.clone(),
+                            params.args.clone(),
+                            params.distinct,
+                            params.filter.clone(),
+                            params.order_by.clone(),
+                            params.null_treatment.clone(),
+                        );
+
+                        // Rename column to avoid schema mismatch
+                        let arg_name = match params.args.get(0) {
+                            Some(Expr::Column(c)) => c.name.clone(),
+                            _ => "col".to_string(),
+                        };
+                        Ok(Expr::Alias(Alias {
+                            expr: Box::new(Expr::AggregateFunction(new_func)),
+                            name: format!("approx_distinct({})", arg_name),
+                            relation: None,
+                            metadata: None,
+                        }))
+                    }
+                    _ => Ok(expr.clone()),
+                })
+                .collect();
+
+            let new_agg = Aggregate::try_new(
+                agg.input.clone(),
+                agg.group_expr.clone(),
+                new_aggr_exprs?,
+            )?;
+            Ok(Transformed::yes(LogicalPlan::Aggregate(new_agg)))
         }
-    }
+        _ => Ok(Transformed::no(node)),
+    })?;
+
+    let rewritten = transformed.data;
+
+    // 2) Re-run analyzer to recompute schemas / aliases and resolve coercions
+    let analyzer = Analyzer::new();
+
+    // execute_and_check takes (LogicalPlan, &ConfigOptions, observer)
+    // observer is FnMut(&LogicalPlan, &dyn AnalyzerRule) — pass a no-op closure
+    let analyzed = analyzer.execute_and_check(
+        rewritten.clone(),
+        ctx.state().config_options(),
+        |_, _| {}, // no-op observer
+    )?;
+
+    Ok(analyzed)
+}
+
+// If we need to create session context separately
+#[no_mangle]
+pub extern "system" fn Java_org_opensearch_datafusion_DataFusionQueryJNI_nativeCreateSessionContext(
+    mut env: JNIEnv,
+    _class: JClass,
+    runtime_ptr: jlong,
+    shard_view_ptr: jlong,
+    global_runtime_env_ptr: jlong,
+) -> jlong {
+    let shard_view = unsafe { &*(shard_view_ptr as *const ShardView) };
+    let table_path = shard_view.table_path();
+    let files_meta = shard_view.files_meta();
+
+    // Will use it once the global RunTime is defined
+    // let runtime_arc = unsafe {
+    //     let boxed = &*(runtime_env_ptr as *const Pin<Arc<RuntimeEnv>>);
+    //     (**boxed).clone()
+    // };
+
+    let list_file_cache = Arc::new(DefaultListFilesCache::default());
+    list_file_cache.put(table_path.prefix(), files_meta);
+
+    let runtime_env = RuntimeEnvBuilder::new()
+        .with_cache_manager(CacheManagerConfig::default()
+            .with_list_files_cache(Some(list_file_cache))).build().unwrap();
+
+
+
+    let ctx = SessionContext::new_with_config_rt(SessionConfig::new(), Arc::new(runtime_env));
+
+
+    // Create default parquet options
+    let file_format = CsvFormat::default();
+    let listing_options = ListingOptions::new(Arc::new(file_format))
+        .with_file_extension(".csv");
+
+
+    // let runtime = unsafe { &mut *(runtime_ptr as *mut Runtime) };
+    let mut session_context_ptr = 0;
+
+    // Ideally the executor will give this
+    Runtime::new().expect("Failed to create Tokio Runtime").block_on(async {
+        let resolved_schema = listing_options
+            .infer_schema(&ctx.state(), &table_path.clone())
+            .await.unwrap();
+
+
+        let config = ListingTableConfig::new(table_path.clone())
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+
+        // Create a new TableProvider
+        let provider = Arc::new(ListingTable::try_new(config).unwrap());
+        let shard_id = table_path.prefix().filename().expect("error in fetching Path");
+        ctx.register_table(shard_id, provider)
+            .expect("Failed to attach the Table");
+
+        // Return back after wrapping in Box
+        session_context_ptr = Box::into_raw(Box::new(ctx)) as jlong
+    });
+
+    session_context_ptr
 }
 
 
