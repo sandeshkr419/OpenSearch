@@ -17,7 +17,7 @@ use jni::sys::{jbyteArray, jlong, jstring};
 use jni::JNIEnv;
 use std::sync::Arc;
 use datafusion::{
-    common::DataFusionError,
+    common::{DataFusionError, Column},
     prelude::*,
     logical_expr::LogicalPlan,
     execution::context::SessionContext,
@@ -42,9 +42,11 @@ use std::time::Instant;
 mod util;
 mod row_id_optimizer;
 mod listing_table;
+mod partial_agg_optimizer;
 
 use crate::listing_table::{ListingOptions, ListingTable, ListingTableConfig};
 use crate::util::{create_file_metadata_from_filenames, parse_string_arr, set_object_result_error, set_object_result_ok};
+use crate::partial_agg_optimizer::PartialAggregationOptimizer;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::PartitionedFile;
@@ -316,6 +318,7 @@ pub extern "system" fn Java_org_opensearch_datafusion_DataFusionQueryJNI_execute
         .with_runtime_env(Arc::from(runtime_env))
         .with_default_features()
         .with_physical_optimizer_rule(Arc::new(ProjectRowIdOptimizer))
+        .with_physical_optimizer_rule(Arc::new(PartialAggregationOptimizer))
         .build();
 
     let ctx = SessionContext::new_with_state(state);
@@ -387,8 +390,9 @@ pub extern "system" fn Java_org_opensearch_datafusion_DataFusionQueryJNI_execute
         };
 
         let dataframe = ctx.execute_logical_plan(logical_plan).await.expect("Failed to execute logical plan");
-        let physical_plan = dataframe.clone().create_physical_plan().await.unwrap();
-        println!("Physical Plan:\n{}", datafusion::physical_plan::displayable(physical_plan.as_ref()).indent(true));
+        let explained = dataframe.clone().explain(true, false).unwrap();
+        let batches = explained.collect().await.unwrap();
+        println!("{}", arrow::util::pretty::pretty_format_batches(&batches).unwrap());
 
         let stream = match dataframe.execute_stream().await {
             Ok(stream) => { stream }
@@ -804,7 +808,6 @@ async fn create_access_plans(
                                 relative_row_ids[i + 1] == relative_row_ids[i] + 1 {
                                 select_count += 1;
                                 i += 1;
-                                target_pos = relative_row_ids[i];
                             }
                             selectors.push(RowSelector::select(select_count));
                             current_pos = relative_row_ids[i] + 1;
