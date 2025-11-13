@@ -42,9 +42,11 @@ use std::time::Instant;
 mod util;
 mod row_id_optimizer;
 mod listing_table;
+mod partial_agg_optimizer;
 
 use crate::listing_table::{ListingOptions, ListingTable, ListingTableConfig};
 use crate::util::{create_file_metadata_from_filenames, parse_string_arr, set_object_result_error, set_object_result_ok};
+use crate::partial_agg_optimizer::PartialAggregationOptimizer;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::PartitionedFile;
@@ -316,6 +318,7 @@ pub extern "system" fn Java_org_opensearch_datafusion_DataFusionQueryJNI_execute
         .with_runtime_env(Arc::from(runtime_env))
         .with_default_features()
         .with_physical_optimizer_rule(Arc::new(ProjectRowIdOptimizer))
+        .with_physical_optimizer_rule(Arc::new(PartialAggregationOptimizer))
         .build();
 
     let ctx = SessionContext::new_with_state(state);
