@@ -50,6 +50,9 @@ use datafusion_expr::AggregateUDF;
 use datafusion::functions_aggregate::count::Count;
 // use datafusion::physical_expr::aggregates::AggregateExpr;
 
+mod partial_agg_optimizer;
+use crate::partial_agg_optimizer::PartialAggregationOptimizer;
+
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::cache::cache_manager::CacheManagerConfig;
 use datafusion::execution::cache::cache_unit::DefaultListFilesCache;
@@ -404,8 +407,7 @@ pub extern "system" fn Java_org_opensearch_datafusion_DataFusionQueryJNI_execute
         .with_config(config)
         .with_runtime_env(Arc::from(runtime_env))
         .with_default_features()
-        // .with_optimizer_rule(Arc::new(OptimizeRowId))
-        // .with_physical_optimizer_rule(Arc::new(FilterRowIdOptimizer)) // TODO: enable only for query phase
+        .with_physical_optimizer_rule(Arc::new(PartialAggregationOptimizer))
         .build();
 
     let ctx = SessionContext::new_with_state(state);
@@ -475,40 +477,25 @@ pub extern "system" fn Java_org_opensearch_datafusion_DataFusionQueryJNI_execute
             }
         };
 
-        println!("Logical plan (old): {}", logical_plan.to_string());
-        let new_logical_plan = rewrite_count_to_approx_distinct(&ctx, &logical_plan).unwrap();
-        println!("Logical plan (new): {}", new_logical_plan.to_string());
+        let dataframe = ctx.execute_logical_plan(logical_plan).await.expect("Failed to execute logical plan");
+        let physical_plan = dataframe.clone().create_physical_plan().await.unwrap();
+        println!("Physical Plan:\n{}", datafusion::physical_plan::displayable(physical_plan.as_ref()).indent(true));
 
-        let physical_plan = ctx.state().create_physical_plan(&logical_plan).await.unwrap();
-        println!("Physical plan: {}", datafusion::physical_plan::displayable(physical_plan.as_ref()).indent(true));
-
-
-
-        // let other_physical_plan = match ctx.state().create_physical_plan(&new_logical_plan).await {
-        //     Ok(plan) => plan,
-        //     Err(e) => {
-        //         println!("Failed to create physical plan: {}", e);
-        //         return 0;
-        //     }
-        // };
-        println!("Other Physical plan: {}", datafusion::physical_plan::displayable(physical_plan.as_ref()).indent(true));
-
-        let partial_plan = extract_partial_aggregate(physical_plan);
-        println!("Modified plan (partial): {}", datafusion::physical_plan::displayable(partial_plan.as_ref()).indent(true));
-
-
-
-        // Execute the plan
-        let task_ctx = ctx.task_ctx();
-        let stream = partial_plan.execute(0, task_ctx).unwrap();
-
-        // let dataframe = ctx.execute_logical_plan(logical_plan).await.unwrap();
-        // let stream = dataframe.execute_stream().await.unwrap();
+        let stream = match dataframe.execute_stream().await {
+            Ok(stream) => { stream }
+            Err(e) => {
+                let error_msg = format!("Failed to execute stream: {}", e);
+                println!("{}", error_msg);
+                env.throw_new("java/lang/Exception", error_msg);
+                return 0;
+            }
+        };
         let stream_ptr = Box::into_raw(Box::new(stream)) as jlong;
         // println!("The memory used currently right now: {:?}", jemalloc_stats::refresh_allocated());
         let duration1 = overall.elapsed();
         println!("Rust: Overall query setup time in milliseconds: {}", duration1.as_millis());
 
+        // set_projections(env, projections, callback);
         stream_ptr
     })
 }
