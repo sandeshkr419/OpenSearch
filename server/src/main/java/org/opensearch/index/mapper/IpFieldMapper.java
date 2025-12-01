@@ -199,7 +199,7 @@ public class IpFieldMapper extends ParametrizedFieldMapper {
      *    2. When using stored field, order and duplicate values would be preserved
      */
     @Override
-    protected DerivedFieldGenerator derivedFieldGenerator() {
+    public DerivedFieldGenerator derivedFieldGenerator() {
         return new DerivedFieldGenerator(
             mappedFieldType,
             new SortedSetDocValuesFetcher(mappedFieldType, simpleName()),
@@ -665,18 +665,22 @@ public class IpFieldMapper extends ParametrizedFieldMapper {
             }
         }
 
-        if (indexed && hasDocValues) {
-            context.doc().add(new InetAddressField(fieldType().name(), address));
-        } else if (indexed) {
-            context.doc().add(new InetAddressPoint(fieldType().name(), address));
-        } else if (hasDocValues) {
-            context.doc().add(new SortedSetDocValuesField(fieldType().name(), new BytesRef(InetAddressPoint.encode(address))));
-        }
-        if ((stored || indexed) && hasDocValues == false) {
-            createFieldNamesField(context);
-        }
-        if (stored) {
-            context.doc().add(new StoredField(fieldType().name(), new BytesRef(InetAddressPoint.encode(address))));
+        if (isPluggableDataFormatFeatureEnabled()) {
+            context.compositeDocumentInput().addField(fieldType(), address);
+        } else {
+            if (indexed && hasDocValues) {
+                context.doc().add(new InetAddressField(fieldType().name(), address));
+            } else if (indexed) {
+                context.doc().add(new InetAddressPoint(fieldType().name(), address));
+            } else if (hasDocValues) {
+                context.doc().add(new SortedSetDocValuesField(fieldType().name(), new BytesRef(InetAddressPoint.encode(address))));
+            }
+            if ((stored || indexed) && hasDocValues == false) {
+                createFieldNamesField(context);
+            }
+            if (stored) {
+                context.doc().add(new StoredField(fieldType().name(), new BytesRef(InetAddressPoint.encode(address))));
+            }
         }
     }
 

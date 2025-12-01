@@ -1,0 +1,274 @@
+import org.opensearch.gradle.test.RestIntegTestTask
+
+apply plugin: 'java'
+apply plugin: 'idea'
+apply plugin: 'eclipse'
+apply plugin: 'opensearch.opensearchplugin'
+apply plugin: 'opensearch.yaml-rest-test'
+apply plugin: 'opensearch.pluginzip'
+apply plugin: 'opensearch.java-agent'
+
+def pluginName = 'ParquetDataFormat'
+def pluginDescription = 'Parquet data format plugin'
+def packagePath = 'com.parquet'
+def pathToPlugin = 'parquetdataformat'
+def pluginClassName = 'ParquetDataFormatPlugin'
+def buildType = project.hasProperty('rustDebug') ? 'debug' : 'release'
+
+group = "ParquetDataFormatGroup"
+
+java {
+  targetCompatibility = JavaVersion.VERSION_21
+  sourceCompatibility = JavaVersion.VERSION_21
+}
+
+tasks.register("preparePluginPathDirs") {
+  mustRunAfter clean
+  doLast {
+    def newPath = pathToPlugin.replace(".", "/")
+    mkdir "src/main/java/$packagePath/$newPath"
+    mkdir "src/test/java/$packagePath/$newPath"
+    mkdir "src/yamlRestTest/java/$packagePath/$newPath"
+  }
+}
+
+publishing {
+  publications {
+    pluginZip(MavenPublication) { publication ->
+    }
+  }
+}
+
+opensearchplugin {
+  name = pluginName
+  description = pluginDescription
+  classname = "${packagePath}.${pathToPlugin}.${pluginClassName}"
+  licenseFile = rootProject.file('LICENSE.txt')
+  noticeFile = rootProject.file('NOTICE.txt')
+}
+
+// This requires an additional Jar not published as part of build-tools
+loggerUsageCheck.enabled = false
+
+// No need to validate pom, as we do not upload to maven/sonatype
+validateNebulaPom.enabled = false
+
+buildscript {
+  ext {
+    opensearch_version = System.getProperty("opensearch.version", "3.3.0-SNAPSHOT")
+  }
+
+  repositories {
+    mavenLocal()
+    maven { url = "https://central.sonatype.com/repository/maven-snapshots/" }
+    mavenCentral()
+    maven { url = "https://plugins.gradle.org/m2/" }
+  }
+
+  dependencies {
+    classpath "org.opensearch.gradle:build-tools:${opensearch_version}"
+  }
+}
+
+repositories {
+  mavenLocal()
+  maven { url = "https://central.sonatype.com/repository/maven-snapshots/" }
+  mavenCentral()
+  maven { url = "https://plugins.gradle.org/m2/" }
+}
+
+configurations.all {
+  resolutionStrategy {
+    force 'commons-codec:commons-codec:1.18.0'
+    force 'org.slf4j:slf4j-api:2.0.17'
+  }
+}
+
+dependencies {
+  // Apache Arrow dependencies (using stable version with unsafe allocator)
+  implementation 'org.apache.arrow:arrow-vector:17.0.0'
+  implementation 'org.apache.arrow:arrow-memory-core:17.0.0'
+  implementation 'org.apache.arrow:arrow-memory-unsafe:17.0.0'
+  implementation 'org.apache.arrow:arrow-format:17.0.0'
+  implementation 'org.apache.arrow:arrow-c-data:17.0.0'
+
+  // Checker Framework annotations (required by Arrow)
+  implementation 'org.checkerframework:checker-qual:3.42.0'
+
+  // Jackson dependencies required by Arrow
+  implementation 'com.fasterxml.jackson.core:jackson-core:2.18.2'
+  implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.2'
+  implementation 'com.fasterxml.jackson.core:jackson-annotations:2.18.2'
+
+  // FlatBuffers dependency required by Arrow
+  implementation "com.google.flatbuffers:flatbuffers-java:${versions.flatbuffers}"
+
+  // Netty dependencies required by Arrow memory management
+  implementation 'io.netty:netty-buffer:4.1.118.Final'
+  implementation 'io.netty:netty-common:4.1.118.Final'
+
+  // SLF4J logging implementation (required by Apache Arrow)
+  implementation 'org.slf4j:slf4j-api:2.0.17'
+
+  // Bridge for slf4j<-->log4j compatibility
+  implementation "org.apache.logging.log4j:log4j-slf4j2-impl:2.23.1"
+}
+
+test {
+  include '**/*Tests.class'
+  // JVM args for Java 9+ only - remove if using Java 8
+  if (JavaVersion.current().isJava9Compatible()) {
+    jvmArgs '--add-opens=java.base/java.nio=ALL-UNNAMED'
+    jvmArgs '--add-opens=java.base/sun.nio.ch=ALL-UNNAMED'
+  }
+}
+
+task integTest(type: RestIntegTestTask) {
+  description = "Run tests against a cluster"
+  testClassesDirs = sourceSets.test.output.classesDirs
+  classpath = sourceSets.test.runtimeClasspath
+}
+tasks.named("check").configure { dependsOn(integTest) }
+
+integTest {
+  // JVM arguments required for Arrow memory access (Java 9+ only)
+  if (JavaVersion.current().isJava9Compatible()) {
+    jvmArgs '--add-opens=java.base/java.nio=ALL-UNNAMED'
+    jvmArgs '--add-opens=java.base/sun.nio.ch=ALL-UNNAMED'
+  }
+
+  // The --debug-jvm command-line option makes the cluster debuggable; this makes the tests debuggable
+  if (System.getProperty("test.debug") != null) {
+    jvmArgs '-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=*:5005'
+  }
+}
+
+testClusters.integTest {
+  testDistribution = "INTEG_TEST"
+
+  // This installs our plugin into the testClusters
+  plugin(project.tasks.bundlePlugin.archiveFile)
+}
+
+run {
+  useCluster testClusters.integTest
+}
+
+// updateVersion: Task to auto update version to the next development iteration
+tasks.register('buildRust', Exec) {
+//  workingDir = file("${projectDir}/src/main/rust")
+//  commandLine = ['cargo', 'build', '--release']
+
+  description = 'Build the Rust JNI library using Cargo'
+  group = 'build'
+
+  workingDir = file("${projectDir}/src/main/rust")
+
+  // Determine the target directory and library name based on OS
+  def osName = System.getProperty('os.name').toLowerCase()
+  def libPrefix = osName.contains('windows') ? '' : 'lib'
+  def libExtension = osName.contains('windows') ? '.dll' : (osName.contains('mac') ? '.dylib' : '.so')
+
+  // Use debug build for development, release for production
+  def targetDir = file("${workingDir}/target/")
+
+  // Find cargo executable - try common locations
+  def cargoExecutable = 'cargo'
+  def possibleCargoPaths = [
+          System.getenv('HOME') + '/.cargo/bin/cargo',
+          '/usr/local/bin/cargo',
+          'cargo'
+  ]
+
+  for (String path : possibleCargoPaths) {
+    if (new File(path).exists()) {
+      cargoExecutable = path
+      break
+    }
+  }
+
+  def cargoArgs = [cargoExecutable, 'build']
+  if (buildType == 'release') {
+    cargoArgs.add('--release')
+  }
+
+  if (osName.contains('windows')) {
+    commandLine cargoArgs
+  } else {
+    commandLine cargoArgs
+  }
+
+  // Set environment variables for cross-compilation if needed
+  environment 'CARGO_TARGET_DIR', targetDir.absolutePath
+
+  inputs.files fileTree("${workingDir}/src")
+  inputs.file "${workingDir}/Cargo.toml"
+  outputs.files file("jni/${targetDir}/${libPrefix}opensearch_datafusion_jni${libExtension}")
+  System.out.println("Building Parquet plugin rust library in ${buildType} mode");
+
+}
+
+tasks.register('copyNativeLib', Copy) {
+  dependsOn buildRust
+  from "src/main/rust/target/${buildType}"
+  into "src/main/resources/native"
+  include "libparquet_dataformat_jni.*"
+  include "parquet_dataformat_jni.dll"
+
+  // Set strategy to avoid errors on duplicate files
+  duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+  eachFile { file ->
+    def os = System.getProperty('os.name').toLowerCase()
+    def arch = System.getProperty('os.arch').toLowerCase()
+
+    def osDir = os.contains('win') ? 'windows' : os.contains('mac') ? 'macos' : 'linux'
+    def archDir = arch.contains('aarch64') || arch.contains('arm64') ? 'aarch64' :
+      arch.contains('64') ? 'x86_64' : 'x86'
+
+    file.path = "${osDir}-${archDir}/${file.name}"
+  }
+
+  doLast {
+    fileTree(destinationDir).visit { FileVisitDetails fvd ->
+      if (!fvd.isDirectory()) {
+        def file = fvd.file
+        if (!org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+          file.setExecutable(false, false)
+        }
+      }
+    }
+  }
+
+}
+
+// Enhanced clean task to remove native build artifacts
+clean {
+    doFirst {
+        delete fileTree('src/main/resources/native') {
+            exclude '.gitkeep' // Keep any gitkeep files if they exist
+        }
+        delete 'src/main/rust/target'
+        println "Cleaned native build artifacts: src/main/resources/native and src/main/rust/target"
+    }
+}
+
+// Wire Rust build tasks into the Gradle build lifecycle
+compileJava.dependsOn copyNativeLib
+processResources.dependsOn copyNativeLib
+sourcesJar.dependsOn copyNativeLib
+copyNativeLib.mustRunAfter clean
+buildRust.mustRunAfter clean
+
+task updateVersion {
+  onlyIf { System.getProperty('newVersion') }
+  doLast {
+    ext.newVersion = System.getProperty('newVersion')
+    println "Setting version to ${newVersion}."
+    // String tokenization to support -SNAPSHOT
+    ant.replaceregexp(file:'build.gradle', match: '"opensearch.version", "\\d.*"', replace: '"opensearch.version", "' + newVersion.tokenize('-')[0] + '-SNAPSHOT"', flags:'g', byline:true)
+  }
+}
+
+// Disable specific license tasks
+licenseHeaders.enabled = false

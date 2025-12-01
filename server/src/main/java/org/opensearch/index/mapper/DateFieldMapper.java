@@ -248,7 +248,7 @@ public final class DateFieldMapper extends ParametrizedFieldMapper {
      *        "format"
      */
     @Override
-    protected DerivedFieldGenerator derivedFieldGenerator() {
+    public DerivedFieldGenerator derivedFieldGenerator() {
         return new DerivedFieldGenerator(mappedFieldType, new SortedNumericDocValuesFetcher(mappedFieldType, simpleName()) {
             @Override
             public Object convert(Object value) {
@@ -845,20 +845,24 @@ public final class DateFieldMapper extends ParametrizedFieldMapper {
             }
         }
 
-        if (indexed) {
-            context.doc().add(new LongPoint(fieldType().name(), timestamp));
-        }
-        if (hasDocValues) {
-            if (skiplist || isSkiplistDefaultEnabled(context.indexSettings().getIndexSortConfig(), fieldType().name())) {
-                context.doc().add(SortedNumericDocValuesField.indexedField(fieldType().name(), timestamp));
-            } else {
-                context.doc().add(new SortedNumericDocValuesField(fieldType().name(), timestamp));
+        if (isPluggableDataFormatFeatureEnabled()) {
+            context.compositeDocumentInput().addField(fieldType(), timestamp);
+        } else {
+            if (indexed) {
+                context.doc().add(new LongPoint(fieldType().name(), timestamp));
             }
-        } else if (store || indexed) {
-            createFieldNamesField(context);
-        }
-        if (store) {
-            context.doc().add(new StoredField(fieldType().name(), timestamp));
+            if (hasDocValues) {
+                if (skiplist || isSkiplistDefaultEnabled(context.indexSettings().getIndexSortConfig(), fieldType().name())) {
+                    context.doc().add(SortedNumericDocValuesField.indexedField(fieldType().name(), timestamp));
+                } else {
+                    context.doc().add(new SortedNumericDocValuesField(fieldType().name(), timestamp));
+                }
+            } else if (store || indexed) {
+                createFieldNamesField(context);
+            }
+            if (store) {
+                context.doc().add(new StoredField(fieldType().name(), timestamp));
+            }
         }
     }
 

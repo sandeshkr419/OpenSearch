@@ -60,6 +60,7 @@ import org.opensearch.search.SearchService;
 import org.opensearch.search.aggregations.AggregationProcessor;
 import org.opensearch.search.aggregations.DefaultAggregationProcessor;
 import org.opensearch.search.aggregations.GlobalAggCollectorManager;
+import org.opensearch.search.aggregations.InternalAggregations;
 import org.opensearch.search.internal.ContextIndexSearcher;
 import org.opensearch.search.internal.ScrollContext;
 import org.opensearch.search.internal.SearchContext;
@@ -98,6 +99,7 @@ public class QueryPhase {
     // TODO: remove this property
     public static final boolean SYS_PROP_REWRITE_SORT = Booleans.parseBoolean(System.getProperty("opensearch.search.rewrite_sort", "true"));
     public static final QueryPhaseSearcher DEFAULT_QUERY_PHASE_SEARCHER = new DefaultQueryPhaseSearcher();
+
     private final QueryPhaseSearcher queryPhaseSearcher;
     private final SuggestProcessor suggestProcessor;
     private final RescoreProcessor rescoreProcessor;
@@ -148,18 +150,31 @@ public class QueryPhase {
             LOGGER.trace("{}", new SearchContextSourcePrinter(searchContext));
         }
 
-        final AggregationProcessor aggregationProcessor = queryPhaseSearcher.aggregationProcessor(searchContext);
+        // Keeping AggregationProcessor and preProcess uncommented since it builds aggregation nesting
+        final AggregationProcessor aggregationProcessor = queryPhaseSearcher.aggregationProcessor(searchContext.getOriginalContext());
         // Pre-process aggregations as late as possible. In the case of a DFS_Q_T_F
         // request, preProcess is called on the DFS phase phase, this is why we pre-process them
         // here to make sure it happens during the QUERY phase
-        aggregationProcessor.preProcess(searchContext);
-        boolean rescore = executeInternal(searchContext, queryPhaseSearcher);
+        aggregationProcessor.preProcess(searchContext.getOriginalContext());
 
-        if (rescore) { // only if we do a regular search
-            rescoreProcessor.process(searchContext);
+        if(Optional.ofNullable(searchContext.queryResult().topDocs().topDocs.totalHits).isEmpty() || searchContext.queryResult().topDocs().topDocs.totalHits.value() == 0) {
+            searchContext.queryResult()
+                .topDocs(
+                    new TopDocsAndMaxScore(new TopDocs(new TotalHits(0, TotalHits.Relation.EQUAL_TO), Lucene.EMPTY_SCORE_DOCS), Float.NaN),
+                    new DocValueFormat[0]
+                );
         }
-        suggestProcessor.process(searchContext);
-        aggregationProcessor.postProcess(searchContext);
+
+        // boolean rescore = executeInternal(searchContext, queryPhaseSearcher);
+
+        // Post process
+        SearchEngineResultConversionUtils.convertDFResultGeneric(searchContext);
+
+        // if (rescore) { // only if we do a regular search
+        // rescoreProcessor.process(searchContext);
+        // }
+        // suggestProcessor.process(searchContext);
+         aggregationProcessor.postProcess(searchContext);
 
         if (searchContext.getProfilers() != null) {
             ProfileShardResult shardResults = SearchProfileShardResults.buildShardResults(

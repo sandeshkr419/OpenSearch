@@ -58,6 +58,7 @@ import org.opensearch.common.lucene.search.Queries;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Setting.Property;
 import org.opensearch.common.settings.Settings;
+import org.opensearch.common.util.FeatureFlags;
 import org.opensearch.common.xcontent.support.XContentMapValues;
 import org.opensearch.core.common.bytes.BytesArray;
 import org.opensearch.core.xcontent.XContentBuilder;
@@ -209,10 +210,21 @@ public class NumberFieldMapper extends ParametrizedFieldMapper {
      *       compared to stored field(stored as float)
      */
     @Override
-    protected DerivedFieldGenerator derivedFieldGenerator() {
+    public DerivedFieldGenerator derivedFieldGenerator() {
         return new DerivedFieldGenerator(mappedFieldType, new SortedNumericDocValuesFetcher(mappedFieldType, simpleName()) {
             @Override
             public Object convert(Object value) {
+                if(value instanceof Integer) {
+                    Integer val = (Integer) value;
+
+                    return switch (type) {
+                        case HALF_FLOAT -> HalfFloatPoint.sortableShortToHalfFloat(val.shortValue());
+                        case FLOAT -> NumericUtils.sortableIntToFloat(val);
+                        case DOUBLE -> NumericUtils.sortableLongToDouble(val);
+                        case BYTE, SHORT, INTEGER, LONG -> val;
+                        case UNSIGNED_LONG -> Numbers.toUnsignedBigInteger(val);
+                    };
+                }
                 Long val = (Long) value;
                 if (val == null) {
                     return null;
@@ -2171,10 +2183,14 @@ public class NumberFieldMapper extends ParametrizedFieldMapper {
             numericValue = fieldType().type.parse(value, coerce.value());
         }
 
-        context.doc().addAll(fieldType().type.createFields(fieldType().name(), numericValue, indexed, hasDocValues, skiplist, stored));
+        if (isPluggableDataFormatFeatureEnabled()) {
+            context.compositeDocumentInput().addField(fieldType(), numericValue);
+        } else {
+            context.doc().addAll(fieldType().type.createFields(fieldType().name(), numericValue, indexed, hasDocValues, skiplist, stored));
 
-        if (hasDocValues == false && (stored || indexed)) {
-            createFieldNamesField(context);
+            if (hasDocValues == false && (stored || indexed)) {
+                createFieldNamesField(context);
+            }
         }
     }
 

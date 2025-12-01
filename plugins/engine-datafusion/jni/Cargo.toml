@@ -1,0 +1,94 @@
+[package]
+name = "opensearch-datafusion-jni"
+version = "0.1.0"
+edition = "2021"
+description = "JNI bindings for DataFusion integration with OpenSearch"
+license = "Apache-2.0"
+
+[lib]
+name = "opensearch_datafusion_jni"
+crate-type = ["cdylib"]
+
+[dependencies]
+# DataFusion dependencies
+datafusion = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-datasource = { workspace = true }
+arrow-json = { workspace = true }
+arrow = { workspace = true }
+#arrow = "55.2.0"
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+arrow-buffer = { workspace = true }
+
+
+# JNI dependencies
+jni = { workspace = true }
+
+# Substrait support
+datafusion-substrait = { workspace = true }
+prost = { workspace = true }
+
+
+# Async runtime
+tokio = { workspace = true }
+futures = { workspace = true }
+#tokio = { version = "1.0", features = ["rt", "rt-multi-thread", "macros"] }
+tokio-metrics = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Logging
+log ={ workspace = true }
+# Parquet support
+parquet = { workspace = true }
+
+# System info
+num_cpus = "1.16"
+
+
+# Object store for file access
+object_store = { workspace = true }
+url = { workspace = true }
+
+# Substrait support
+substrait = { workspace = true }
+
+# Temporary directory support
+tempfile ={ workspace = true }
+chrono = { workspace = true }
+
+async-trait = { workspace = true }
+itertools = { workspace = true }
+rstest = { workspace = true }
+regex = { workspace = true }
+
+once_cell = { workspace = true }
+tokio-stream = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+
+[build-dependencies]
+cbindgen = "0.27"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+incremental = true
+debug = "line-tables-only"        #TODO : remove this
+strip = false
+
+[profile.dev]
+opt-level = 1          # Some optimization for reasonable performance
+lto = false           # Disable LTO for faster builds
+codegen-units = 16    # More parallel compilation
+incremental = true    # Enable incremental compilation
+debug = "full"
+strip = false

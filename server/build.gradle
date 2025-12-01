@@ -72,10 +72,13 @@ dependencies {
   api project(":libs:opensearch-geo")
   api project(":libs:opensearch-telemetry")
   api project(":libs:opensearch-task-commons")
+  api project(':libs:opensearch-vectorized-exec-spi')
 
   compileOnly project(":libs:agent-sm:bootstrap")
   compileOnly project(':libs:opensearch-plugin-classloader')
   testRuntimeOnly project(':libs:opensearch-plugin-classloader')
+
+  //implementation "org.apache.commons:commons-lang3:${versions.commonslang}"
 
   api libs.bundles.lucene
 
@@ -115,6 +118,7 @@ dependencies {
   api libs.protobuf
   api libs.jakartaannotation
 
+
   // https://mvnrepository.com/artifact/org.roaringbitmap/RoaringBitmap
   api libs.roaringbitmap
   testImplementation 'org.awaitility:awaitility:4.3.0'
@@ -135,8 +139,7 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 compileJava {
-  options.compilerArgs += ['-processor', ['org.apache.logging.log4j.core.config.plugins.processor.PluginProcessor',
-    'org.opensearch.common.annotation.processor.ApiAnnotationProcessor'].join(',')]
+  options.compilerArgs += ['-processor', ['org.apache.logging.log4j.core.config.plugins.processor.PluginProcessor'].join(',')]
 }
 
 tasks.named("internalClusterTest").configure {

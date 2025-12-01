@@ -798,7 +798,7 @@ public final class IndexSettings {
 
     public static final Setting<Boolean> INDEX_DERIVED_SOURCE_SETTING = Setting.boolSetting(
         "index.derived_source.enabled",
-        false,
+        true,
         Property.IndexScope,
         Property.Final
     );
@@ -1172,6 +1172,7 @@ public final class IndexSettings {
             LogByteSizeMergePolicyProvider.INDEX_LBS_NO_CFS_RATIO_SETTING,
             logByteSizeMergePolicyProvider::setLBSNoCFSRatio
         );
+
         scopedSettings.addSettingsUpdateConsumer(
             MergeSchedulerConfig.MAX_THREAD_COUNT_SETTING,
             MergeSchedulerConfig.MAX_MERGE_COUNT_SETTING,

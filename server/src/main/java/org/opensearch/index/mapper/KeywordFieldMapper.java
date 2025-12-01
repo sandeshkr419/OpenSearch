@@ -294,7 +294,7 @@ public final class KeywordFieldMapper extends ParametrizedFieldMapper {
      *    2. When using stored field, order and duplicate values would be preserved
      */
     @Override
-    protected DerivedFieldGenerator derivedFieldGenerator() {
+    public DerivedFieldGenerator derivedFieldGenerator() {
         return new DerivedFieldGenerator(
             mappedFieldType,
             new SortedSetDocValuesFetcher(mappedFieldType, simpleName()),
@@ -862,19 +862,23 @@ public final class KeywordFieldMapper extends ParametrizedFieldMapper {
             value = normalizeValue(normalizer, name(), value);
         }
 
-        // convert to utf8 only once before feeding postings/dv/stored fields
-        final BytesRef binaryValue = new BytesRef(value);
-        if (fieldType.indexOptions() != IndexOptions.NONE || fieldType.stored()) {
-            Field field = new KeywordField(fieldType().name(), binaryValue, fieldType);
-            context.doc().add(field);
+        if (isPluggableDataFormatFeatureEnabled()) {
+            context.compositeDocumentInput().addField(fieldType(), value);
+        } else {
+            // convert to utf8 only once before feeding postings/dv/stored fields
+            final BytesRef binaryValue = new BytesRef(value);
+            if (fieldType.indexOptions() != IndexOptions.NONE || fieldType.stored()) {
+                Field field = new KeywordField(fieldType().name(), binaryValue, fieldType);
+                context.doc().add(field);
 
-            if (fieldType().hasDocValues() == false && fieldType.omitNorms()) {
-                createFieldNamesField(context);
+                if (fieldType().hasDocValues() == false && fieldType.omitNorms()) {
+                    createFieldNamesField(context);
+                }
             }
-        }
 
-        if (fieldType().hasDocValues()) {
-            context.doc().add(new SortedSetDocValuesField(fieldType().name(), binaryValue));
+            if (fieldType().hasDocValues()) {
+                context.doc().add(new SortedSetDocValuesField(fieldType().name(), binaryValue));
+            }
         }
     }
 

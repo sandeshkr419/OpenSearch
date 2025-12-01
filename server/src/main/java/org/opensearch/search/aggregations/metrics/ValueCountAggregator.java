@@ -45,6 +45,7 @@ import org.opensearch.search.aggregations.Aggregator;
 import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.aggregations.LeafBucketCollector;
 import org.opensearch.search.aggregations.LeafBucketCollectorBase;
+import org.opensearch.search.aggregations.ShardResultConvertor;
 import org.opensearch.search.aggregations.StarTreeBucketCollector;
 import org.opensearch.search.aggregations.StarTreePreComputeCollector;
 import org.opensearch.search.aggregations.support.ValuesSource;
@@ -65,7 +66,7 @@ import static org.opensearch.search.startree.StarTreeQueryHelper.getSupportedSta
  *
  * @opensearch.internal
  */
-public class ValueCountAggregator extends NumericMetricsAggregator.SingleValue implements StarTreePreComputeCollector {
+public class ValueCountAggregator extends NumericMetricsAggregator.SingleValue implements StarTreePreComputeCollector, ShardResultConvertor {
 
     final ValuesSource valuesSource;
 
@@ -208,5 +209,11 @@ public class ValueCountAggregator extends NumericMetricsAggregator.SingleValue i
             (bucket) -> counts = context.bigArrays().grow(counts, bucket + 1),
             (bucket, metricValue) -> counts.increment(bucket, metricValue)
         );
+    }
+
+    @Override
+    public InternalAggregation convertRow(Map<String, Object[]> shardResult, int row, SearchContext searchContext) {
+        Object[] values = shardResult.get(name);
+        return new InternalValueCount(name, ((Number) values[row]).longValue(), metadata());
     }
 }

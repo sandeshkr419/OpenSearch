@@ -79,6 +79,11 @@ import org.opensearch.core.common.bytes.BytesReference;
 import org.opensearch.core.common.unit.ByteSizeValue;
 import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.index.VersionType;
+import org.opensearch.index.engine.exec.bridge.CheckpointState;
+import org.opensearch.index.engine.exec.bridge.Indexer;
+import org.opensearch.index.engine.exec.bridge.IndexingThrottler;
+import org.opensearch.index.engine.exec.bridge.StatsHolder;
+import org.opensearch.index.engine.exec.composite.CompositeDataFormatWriter;
 import org.opensearch.index.mapper.IdFieldMapper;
 import org.opensearch.index.mapper.Mapping;
 import org.opensearch.index.mapper.ParseContext.Document;
@@ -130,7 +135,7 @@ import static org.opensearch.index.seqno.SequenceNumbers.UNASSIGNED_SEQ_NO;
  * @opensearch.api
  */
 @PublicApi(since = "1.0.0")
-public abstract class Engine implements LifecycleAware, Closeable {
+public abstract class Engine implements LifecycleAware, Closeable, Indexer, CheckpointState, StatsHolder, IndexingThrottler, SearcherOperations<Engine.Searcher, ReferenceManager<OpenSearchDirectoryReader>> {
 
     public static final String SYNC_COMMIT_ID = "sync_id";  // TODO: remove sync_id in 3.0
     public static final String HISTORY_UUID_KEY = "history_uuid";
@@ -215,17 +220,6 @@ public abstract class Engine implements LifecycleAware, Closeable {
 
     /** returns the history uuid for the engine */
     public abstract String getHistoryUUID();
-
-    /**
-     * Reads the current stored history ID from commit data.
-     */
-    String loadHistoryUUID(Map<String, String> commitData) {
-        final String uuid = commitData.get(HISTORY_UUID_KEY);
-        if (uuid == null) {
-            throw new IllegalStateException("commit doesn't contain history uuid");
-        }
-        return uuid;
-    }
 
     /** Returns how many bytes we are currently moving from heap to disk */
     public abstract long getWritingBytes();
@@ -334,69 +328,6 @@ public abstract class Engine implements LifecycleAware, Closeable {
     }
 
     /**
-     * A throttling class that can be activated, causing the
-     * {@code acquireThrottle} method to block on a lock when throttling
-     * is enabled
-     *
-     * @opensearch.internal
-     */
-    protected static final class IndexThrottle {
-        private final CounterMetric throttleTimeMillisMetric = new CounterMetric();
-        private volatile long startOfThrottleNS;
-        private static final ReleasableLock NOOP_LOCK = new ReleasableLock(new NoOpLock());
-        private final ReleasableLock lockReference = new ReleasableLock(new ReentrantLock());
-        private volatile ReleasableLock lock = NOOP_LOCK;
-
-        public Releasable acquireThrottle() {
-            return lock.acquire();
-        }
-
-        /** Activate throttling, which switches the lock to be a real lock */
-        public void activate() {
-            assert lock == NOOP_LOCK : "throttling activated while already active";
-            startOfThrottleNS = System.nanoTime();
-            lock = lockReference;
-        }
-
-        /** Deactivate throttling, which switches the lock to be an always-acquirable NoOpLock */
-        public void deactivate() {
-            assert lock != NOOP_LOCK : "throttling deactivated but not active";
-            lock = NOOP_LOCK;
-
-            assert startOfThrottleNS > 0 : "Bad state of startOfThrottleNS";
-            long throttleTimeNS = System.nanoTime() - startOfThrottleNS;
-            if (throttleTimeNS >= 0) {
-                // Paranoia (System.nanoTime() is supposed to be monotonic): time slip may have occurred but never want
-                // to add a negative number
-                throttleTimeMillisMetric.inc(TimeValue.nsecToMSec(throttleTimeNS));
-            }
-        }
-
-        long getThrottleTimeInMillis() {
-            long currentThrottleNS = 0;
-            if (isThrottled() && startOfThrottleNS != 0) {
-                currentThrottleNS += System.nanoTime() - startOfThrottleNS;
-                if (currentThrottleNS < 0) {
-                    // Paranoia (System.nanoTime() is supposed to be monotonic): time slip must have happened, have to ignore this value
-                    currentThrottleNS = 0;
-                }
-            }
-            return throttleTimeMillisMetric.count() + TimeValue.nsecToMSec(currentThrottleNS);
-        }
-
-        boolean isThrottled() {
-            return lock != NOOP_LOCK;
-        }
-
-        boolean throttleLockIsHeldByCurrentThread() { // to be used in assertions and tests only
-            if (isThrottled()) {
-                return lock.isHeldByCurrentThread();
-            }
-            return false;
-        }
-    }
-
-    /**
      * Returns the number of milliseconds this engine was under index throttling.
      */
     public abstract long getIndexThrottleTimeInMillis();
@@ -406,38 +337,6 @@ public abstract class Engine implements LifecycleAware, Closeable {
      * @see #getIndexThrottleTimeInMillis()
      */
     public abstract boolean isThrottled();
-
-    /**
-     * A Lock implementation that always allows the lock to be acquired
-     *
-     * @opensearch.internal
-     */
-    protected static final class NoOpLock implements Lock {
-
-        @Override
-        public void lock() {}
-
-        @Override
-        public void lockInterruptibly() throws InterruptedException {}
-
-        @Override
-        public boolean tryLock() {
-            return true;
-        }
-
-        @Override
-        public boolean tryLock(long time, TimeUnit unit) throws InterruptedException {
-            return true;
-        }
-
-        @Override
-        public void unlock() {}
-
-        @Override
-        public Condition newCondition() {
-            throw new UnsupportedOperationException("NoOpLock can't provide a condition");
-        }
-    }
 
     /**
      * Perform document index operation on the engine
@@ -678,11 +577,11 @@ public abstract class Engine implements LifecycleAware, Closeable {
     @PublicApi(since = "1.0.0")
     public static class NoOpResult extends Result {
 
-        NoOpResult(long term, long seqNo) {
+        public NoOpResult(long term, long seqNo) {
             super(Operation.TYPE.NO_OP, 0, term, seqNo);
         }
 
-        NoOpResult(long term, long seqNo, Exception failure) {
+        public NoOpResult(long term, long seqNo, Exception failure) {
             super(Operation.TYPE.NO_OP, failure, 0, term, seqNo);
         }
 
@@ -762,6 +661,7 @@ public abstract class Engine implements LifecycleAware, Closeable {
             SearcherSupplier reader = new SearcherSupplier(wrapper) {
                 @Override
                 public Searcher acquireSearcherInternal(String source) {
+                    // TODO : this should return
                     assert assertSearcherIsWarmedUp(source, scope);
                     return new Searcher(
                         source,
@@ -828,9 +728,9 @@ public abstract class Engine implements LifecycleAware, Closeable {
         }
     }
 
-    protected abstract ReferenceManager<OpenSearchDirectoryReader> getReferenceManager(SearcherScope scope);
+    public abstract ReferenceManager<OpenSearchDirectoryReader> getReferenceManager(SearcherScope scope);
 
-    boolean assertSearcherIsWarmedUp(String source, SearcherScope scope) {
+    public boolean assertSearcherIsWarmedUp(String source, SearcherScope scope) {
         return true;
     }
 
@@ -1404,7 +1304,7 @@ public abstract class Engine implements LifecycleAware, Closeable {
      * @opensearch.api
      */
     @PublicApi(since = "1.0.0")
-    public abstract static class SearcherSupplier implements Releasable {
+    public abstract static class SearcherSupplier extends EngineSearcherSupplier<Searcher> {
         private final Function<Searcher, Searcher> wrapper;
         private final AtomicBoolean released = new AtomicBoolean(false);
 
@@ -1439,8 +1339,10 @@ public abstract class Engine implements LifecycleAware, Closeable {
      *
      * @opensearch.api
      */
+
     @PublicApi(since = "1.0.0")
-    public static final class Searcher extends IndexSearcher implements Releasable {
+    public static final class Searcher extends IndexSearcher implements Releasable, EngineSearcher {
+        // TODO : this extends index searcher
         private final String source;
         private final Closeable onClose;
 
@@ -1551,7 +1453,7 @@ public abstract class Engine implements LifecycleAware, Closeable {
                 return this == PEER_RECOVERY || this == LOCAL_TRANSLOG_RECOVERY;
             }
 
-            boolean isFromTranslog() {
+            public boolean isFromTranslog() {
                 return this == LOCAL_TRANSLOG_RECOVERY || this == LOCAL_RESET;
             }
         }
@@ -1607,6 +1509,7 @@ public abstract class Engine implements LifecycleAware, Closeable {
         private final boolean isRetry;
         private final long ifSeqNo;
         private final long ifPrimaryTerm;
+        public CompositeDataFormatWriter.CompositeDocumentInput documentInput;
 
         public Index(
             Term uid,
@@ -1633,6 +1536,7 @@ public abstract class Engine implements LifecycleAware, Closeable {
             this.autoGeneratedIdTimestamp = autoGeneratedIdTimestamp;
             this.ifSeqNo = ifSeqNo;
             this.ifPrimaryTerm = ifPrimaryTerm;
+            this.documentInput = doc.getDocumentInput();
         }
 
         public Index(Term uid, long primaryTerm, ParsedDocument doc) {

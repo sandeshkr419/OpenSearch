@@ -51,6 +51,7 @@ import org.opensearch.search.aggregations.Aggregator;
 import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.aggregations.LeafBucketCollector;
 import org.opensearch.search.aggregations.LeafBucketCollectorBase;
+import org.opensearch.search.aggregations.ShardResultConvertor;
 import org.opensearch.search.aggregations.StarTreeBucketCollector;
 import org.opensearch.search.aggregations.StarTreePreComputeCollector;
 import org.opensearch.search.aggregations.support.ValuesSource;
@@ -61,6 +62,7 @@ import org.opensearch.search.streaming.Streamable;
 import org.opensearch.search.streaming.StreamingCostMetrics;
 
 import java.io.IOException;
+import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -72,7 +74,7 @@ import static org.opensearch.search.startree.StarTreeQueryHelper.getSupportedSta
  *
  * @opensearch.internal
  */
-class MinAggregator extends NumericMetricsAggregator.SingleValue implements StarTreePreComputeCollector, Streamable {
+class MinAggregator extends NumericMetricsAggregator.SingleValue implements StarTreePreComputeCollector, ShardResultConvertor, Streamable {
     private static final int MAX_BKD_LOOKUPS = 1024;
 
     final ValuesSource.Numeric valuesSource;
@@ -272,6 +274,16 @@ class MinAggregator extends NumericMetricsAggregator.SingleValue implements Star
             },
             (bucket, metricValue) -> mins.set(bucket, Math.min(mins.get(bucket), NumericUtils.sortableLongToDouble(metricValue)))
         );
+    }
+
+    @Override
+    public InternalAggregation convertRow(Map<String, Object[]> shardResult, int row, SearchContext searchContext) {
+        Object[] values = shardResult.get(name);
+        if (values[row].getClass().equals(LocalDateTime.class)) {
+            LocalDateTime value = (LocalDateTime) values[row];
+            return new InternalMin(name, convertLocalDateTimeToEpochMillis(value), format, metadata());
+        }
+        return new InternalMin(name, ((Number) values[row]).doubleValue(), format, metadata());
     }
 
     @Override

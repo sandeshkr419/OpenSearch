@@ -51,6 +51,7 @@ import org.opensearch.search.aggregations.Aggregator;
 import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.aggregations.LeafBucketCollector;
 import org.opensearch.search.aggregations.LeafBucketCollectorBase;
+import org.opensearch.search.aggregations.ShardResultConvertor;
 import org.opensearch.search.aggregations.StarTreeBucketCollector;
 import org.opensearch.search.aggregations.StarTreePreComputeCollector;
 import org.opensearch.search.aggregations.support.ValuesSource;
@@ -69,7 +70,7 @@ import static org.opensearch.search.startree.StarTreeQueryHelper.getSupportedSta
  *
  * @opensearch.internal
  */
-class AvgAggregator extends NumericMetricsAggregator.SingleValue implements StarTreePreComputeCollector {
+class AvgAggregator extends NumericMetricsAggregator.SingleValue implements StarTreePreComputeCollector, ShardResultConvertor {
 
     final ValuesSource.Numeric valuesSource;
 
@@ -274,5 +275,12 @@ class AvgAggregator extends NumericMetricsAggregator.SingleValue implements Star
                 counts.increment(bucket, valueCountMetricValuesIterator.nextValue());
             }
         };
+    }
+
+    @Override
+    public InternalAggregation convertRow(Map<String, Object[]> shardResult, int row, SearchContext searchContext) {
+        Object[] counts = shardResult.get(name + "_count");
+        Object[] sums = shardResult.get(name + "_sum");
+        return new InternalAvg(name, ((Number) sums[row]).doubleValue(), ((Number) counts[row]).longValue(), format, metadata());
     }
 }
