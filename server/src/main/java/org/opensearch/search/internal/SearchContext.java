@@ -84,6 +84,7 @@ import org.opensearch.search.streaming.FlushMode;
 import org.opensearch.search.suggest.SuggestionSearchContext;
 
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -197,6 +198,10 @@ public abstract class SearchContext implements Releasable {
     public abstract SearchHighlightContext highlight();
 
     public abstract void highlight(SearchHighlightContext highlight);
+
+    public SearchContext getOriginalContext() {
+        return this;
+    }
 
     public InnerHitsContext innerHits() {
         if (innerHitsContext == null) {
@@ -594,4 +599,17 @@ public abstract class SearchContext implements Releasable {
         return false;
     }
 
+
+    public void setDFResults(Map<String, Object[]> dfResults) {
+
+    }
+
+    public Map<String, Object[]> getDFResults() {
+        return Collections.emptyMap();
+    }
+
+    // TODO : This should be a part of mapper given by DataFormat or SearchEngine as related to Field type.
+    public Comparable convertToComparable(Object rawValue) {
+        throw new UnsupportedOperationException("Engine doesn't implement response value conversion");
+    }
 }

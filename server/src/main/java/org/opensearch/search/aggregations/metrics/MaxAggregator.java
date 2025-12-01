@@ -51,6 +51,7 @@ import org.opensearch.search.aggregations.Aggregator;
 import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.aggregations.LeafBucketCollector;
 import org.opensearch.search.aggregations.LeafBucketCollectorBase;
+import org.opensearch.search.aggregations.ShardResultConvertor;
 import org.opensearch.search.aggregations.StarTreeBucketCollector;
 import org.opensearch.search.aggregations.StarTreePreComputeCollector;
 import org.opensearch.search.aggregations.support.ValuesSource;
@@ -61,6 +62,7 @@ import org.opensearch.search.streaming.Streamable;
 import org.opensearch.search.streaming.StreamingCostMetrics;
 
 import java.io.IOException;
+import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -73,7 +75,7 @@ import static org.opensearch.search.startree.StarTreeQueryHelper.getSupportedSta
  *
  * @opensearch.internal
  */
-class MaxAggregator extends NumericMetricsAggregator.SingleValue implements StarTreePreComputeCollector, Streamable {
+class MaxAggregator extends NumericMetricsAggregator.SingleValue implements StarTreePreComputeCollector, ShardResultConvertor, Streamable {
 
     final ValuesSource.Numeric valuesSource;
     final DocValueFormat formatter;
@@ -286,5 +288,15 @@ class MaxAggregator extends NumericMetricsAggregator.SingleValue implements Star
     @Override
     public StreamingCostMetrics getStreamingCostMetrics() {
         return new StreamingCostMetrics(true, 1, 1, 1, 1);
+    }
+
+    @Override
+    public InternalAggregation convertRow(Map<String, Object[]> shardResult, int row, SearchContext searchContext) {
+        Object[] values = shardResult.get(name);
+        if (values[row].getClass().equals(LocalDateTime.class)) {
+            LocalDateTime value = (LocalDateTime) values[row];
+            return new InternalMax(name, convertLocalDateTimeToEpochMillis(value), formatter, metadata());
+        }
+        return new InternalMax(name, ((Number) values[row]).doubleValue(), formatter, metadata());
     }
 }

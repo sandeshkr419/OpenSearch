@@ -33,25 +33,40 @@
 package org.opensearch.search.aggregations.bucket.terms;
 
 import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.util.BytesRef;
+import org.opensearch.common.collect.Tuple;
 import org.opensearch.search.DocValueFormat;
 import org.opensearch.search.aggregations.Aggregator;
 import org.opensearch.search.aggregations.AggregatorFactories;
 import org.opensearch.search.aggregations.BucketOrder;
+import org.opensearch.search.aggregations.InternalAggregation;
+import org.opensearch.search.aggregations.InternalAggregations;
+import org.opensearch.search.aggregations.InternalOrder;
+import org.opensearch.search.aggregations.ShardResultConvertor;
 import org.opensearch.search.aggregations.bucket.terms.heuristic.SignificanceHeuristic;
+import org.opensearch.search.aggregations.metrics.InternalValueCount;
+import org.opensearch.search.aggregations.metrics.ValueCountAggregationBuilder;
+import org.opensearch.search.aggregations.metrics.ValueCountAggregator;
 import org.opensearch.search.internal.ContextIndexSearcher;
 import org.opensearch.search.internal.SearchContext;
+import org.opensearch.search.query.SearchEngineResultConversionUtils;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 
 import static java.util.Collections.emptyList;
+import static org.opensearch.search.aggregations.InternalOrder.isKeyOrder;
 
 /**
  * Base Aggregator to collect all docs that contain significant terms
  *
  * @opensearch.internal
  */
-abstract class AbstractStringTermsAggregator extends TermsAggregator {
+abstract class AbstractStringTermsAggregator extends TermsAggregator implements ShardResultConvertor {
 
     protected final boolean showTermDocCountError;
 
@@ -103,4 +118,41 @@ abstract class AbstractStringTermsAggregator extends TermsAggregator {
             bucketCountThresholds
         );
     }
+
+    @Override
+    public List<InternalAggregation> convert(Map<String, Object[]> shardResult, SearchContext searchContext) {
+        int rowCount = shardResult.get(shardResult.keySet().stream().findFirst().get()).length;
+        List<StringTerms.Bucket> buckets = new ArrayList<>(rowCount);
+        for (int row = 0; row < rowCount; row++) {
+            String termKey = (String) searchContext.convertToComparable(shardResult.get(name)[row]);
+            Tuple<List<InternalAggregation>, Long> subAggsAndDocCount = SearchEngineResultConversionUtils.extractSubAggsAndDocCount(subAggregators, searchContext, shardResult, row);
+            buckets.add(new StringTerms.Bucket(
+                new BytesRef(termKey),
+                subAggsAndDocCount.v2(),
+                InternalAggregations.from(subAggsAndDocCount.v1()),
+                showTermDocCountError,
+                0,
+                format
+            ));
+        }
+        BucketOrder reduceOrder = order;
+        if (isKeyOrder(order) == false) {
+            reduceOrder = InternalOrder.key(true);
+            buckets.sort(reduceOrder.comparator());
+        }
+        return List.of(new StringTerms(
+            name,
+            reduceOrder,
+            order,
+            null,
+            format,
+            bucketCountThresholds.getShardSize(),
+            showTermDocCountError,
+            0,
+            buckets,
+            0,
+            bucketCountThresholds
+        ));
+    }
+
 }

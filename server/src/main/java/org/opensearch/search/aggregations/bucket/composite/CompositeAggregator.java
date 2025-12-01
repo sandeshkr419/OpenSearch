@@ -59,6 +59,7 @@ import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.CollectionUtil;
 import org.apache.lucene.util.RoaringDocIdSet;
 import org.opensearch.common.Rounding;
+import org.opensearch.common.collect.Tuple;
 import org.opensearch.common.lease.Releasables;
 import org.opensearch.index.IndexSortConfig;
 import org.opensearch.lucene.queries.SearchAfterSortedDocQuery;
@@ -72,12 +73,16 @@ import org.opensearch.search.aggregations.InternalAggregations;
 import org.opensearch.search.aggregations.LeafBucketCollector;
 import org.opensearch.search.aggregations.MultiBucketCollector;
 import org.opensearch.search.aggregations.MultiBucketConsumerService;
+import org.opensearch.search.aggregations.ShardResultConvertor;
 import org.opensearch.search.aggregations.bucket.BucketsAggregator;
 import org.opensearch.search.aggregations.bucket.filterrewrite.CompositeAggregatorBridge;
 import org.opensearch.search.aggregations.bucket.filterrewrite.FilterRewriteOptimizationContext;
 import org.opensearch.search.aggregations.bucket.missing.MissingOrder;
 import org.opensearch.search.aggregations.bucket.terms.LongKeyedBucketOrds;
+import org.opensearch.search.aggregations.metrics.InternalValueCount;
+import org.opensearch.search.aggregations.metrics.ValueCountAggregator;
 import org.opensearch.search.internal.SearchContext;
+import org.opensearch.search.query.SearchEngineResultConversionUtils;
 import org.opensearch.search.searchafter.SearchAfterBuilder;
 import org.opensearch.search.sort.SortAndFormats;
 
@@ -100,7 +105,7 @@ import static org.opensearch.search.aggregations.bucket.filterrewrite.Aggregator
  *
  * @opensearch.internal
  */
-public final class CompositeAggregator extends BucketsAggregator {
+public final class CompositeAggregator extends BucketsAggregator implements ShardResultConvertor {
     private final int size;
     private final List<String> sourceNames;
     private final int[] reverseMuls;
@@ -725,6 +730,55 @@ public final class CompositeAggregator extends BucketsAggregator {
                 }
             }
         };
+    }
+
+    @Override
+    public List<InternalAggregation> convert(Map<String, Object[]> shardResult, SearchContext searchContext) {
+        // Generate the composite keys
+        List<Comparable<?>> currentCompositeKey = new ArrayList<>(sourceConfigs.length);
+        List<CompositeKey> compositeKeys = new ArrayList<>(shardResult.size());
+        for (int i = 0; i < shardResult.get(shardResult.keySet().stream().findFirst().get()).length; i++) {
+            for (CompositeValuesSourceConfig sourceConfig : sourceConfigs) {
+                if (sourceConfig.fieldType() == null) {
+                    throw new UnsupportedOperationException("Composite aggregation does not support script field types");
+                }
+                Object[] values = shardResult.get(sourceConfig.fieldType().name());
+                // TODO : Would require conversion for certain types,
+                currentCompositeKey.add(searchContext.convertToComparable(values[i]));
+            }
+            compositeKeys.add(new CompositeKey(currentCompositeKey.toArray(new Comparable[0])));
+            currentCompositeKey.clear();
+        }
+        List<InternalComposite.InternalBucket> buckets = new ArrayList<>();
+        int row = 0;
+        for (CompositeKey compositeKey : compositeKeys) {
+            Tuple<List<InternalAggregation>, Long> subAggsAndDocCount = SearchEngineResultConversionUtils.extractSubAggsAndDocCount(subAggregators, searchContext, shardResult, row);
+            buckets.add(new InternalComposite.InternalBucket(
+                sourceNames,
+                formats,
+                compositeKey,
+                reverseMuls,
+                missingOrders,
+                subAggsAndDocCount.v2(),
+                InternalAggregations.from(subAggsAndDocCount.v1())
+            ));
+            row++;
+        }
+        buckets.sort(InternalComposite.InternalBucket::compareKey);
+        CompositeKey lastBucket = buckets.isEmpty() ? null : buckets.getLast().getRawKey();
+        return List.of(
+            new InternalComposite(
+                name,
+                size,
+                sourceNames,
+                formats,
+                buckets,
+                lastBucket,
+                reverseMuls,
+                missingOrders,
+                earlyTerminated,
+                metadata()
+            ));
     }
 
     /**

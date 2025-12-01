@@ -389,16 +389,21 @@ public class BooleanFieldMapper extends ParametrizedFieldMapper {
         if (value == null) {
             return;
         }
-        if (indexed) {
-            context.doc().add(new Field(fieldType().name(), value ? "T" : "F", Defaults.FIELD_TYPE));
-        }
-        if (stored) {
-            context.doc().add(new StoredField(fieldType().name(), value ? "T" : "F"));
-        }
-        if (hasDocValues) {
-            context.doc().add(new SortedNumericDocValuesField(fieldType().name(), value ? 1 : 0));
+
+        if (isPluggableDataFormatFeatureEnabled()) {
+            context.compositeDocumentInput().addField(fieldType(), value);
         } else {
-            createFieldNamesField(context);
+            if (indexed) {
+                context.doc().add(new Field(fieldType().name(), value ? "T" : "F", Defaults.FIELD_TYPE));
+            }
+            if (stored) {
+                context.doc().add(new StoredField(fieldType().name(), value ? "T" : "F"));
+            }
+            if (hasDocValues) {
+                context.doc().add(new SortedNumericDocValuesField(fieldType().name(), value ? 1 : 0));
+            } else {
+                createFieldNamesField(context);
+            }
         }
     }
 
@@ -430,7 +435,7 @@ public class BooleanFieldMapper extends ParametrizedFieldMapper {
      *    2. When using stored field, for multi value field order would be preserved
      */
     @Override
-    protected DerivedFieldGenerator derivedFieldGenerator() {
+    public DerivedFieldGenerator derivedFieldGenerator() {
         return new DerivedFieldGenerator(mappedFieldType, new SortedNumericDocValuesFetcher(mappedFieldType, simpleName()) {
             @Override
             public Object convert(Object value) {

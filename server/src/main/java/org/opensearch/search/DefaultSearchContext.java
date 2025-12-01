@@ -225,6 +225,7 @@ final class DefaultSearchContext extends SearchContext {
 
     private boolean isStreamSearch;
     private StreamSearchChannelListener listener;
+    private Map<String, Object[]> dfResults;
     private final SetOnce<FlushMode> cachedFlushMode = new SetOnce<>();
 
     DefaultSearchContext(
@@ -257,7 +258,7 @@ final class DefaultSearchContext extends SearchContext {
         this.indexService = readerContext.indexService();
         this.indexShard = readerContext.indexShard();
         this.clusterService = clusterService;
-        this.engineSearcher = readerContext.acquireSearcher("search");
+        this.engineSearcher = (Engine.Searcher) readerContext.acquireSearcher("search");
         this.concurrentSearchMode = evaluateConcurrentSearchMode(executor);
         this.searcher = new ContextIndexSearcher(
             engineSearcher.getIndexReader(),
@@ -1310,5 +1311,13 @@ final class DefaultSearchContext extends SearchContext {
     @Override
     public long getStreamingMinEstimatedBucketCount() {
         return clusterService.getClusterSettings().get(STREAMING_MIN_ESTIMATED_BUCKET_COUNT);
+    }
+
+    public void setDFResults(Map<String, Object[]> dfResults) {
+        this.dfResults = dfResults;
+    }
+
+    public Map<String, Object[]> getDFResults() {
+        return dfResults;
     }
 }
