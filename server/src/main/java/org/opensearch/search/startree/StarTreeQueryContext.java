@@ -21,6 +21,8 @@ import org.opensearch.index.compositeindex.datacube.startree.utils.date.DateTime
 import org.opensearch.index.mapper.CompositeDataCubeFieldType;
 import org.opensearch.index.query.QueryBuilder;
 import org.opensearch.search.aggregations.AggregatorFactory;
+import org.opensearch.search.aggregations.bucket.composite.CompositeAggregationFactory;
+import org.opensearch.search.aggregations.bucket.composite.CompositeValuesSourceConfig;
 import org.opensearch.search.aggregations.bucket.histogram.DateHistogramAggregatorFactory;
 import org.opensearch.search.aggregations.bucket.range.RangeAggregatorFactory;
 import org.opensearch.search.aggregations.bucket.terms.MultiTermsAggregationFactory;
@@ -238,6 +240,31 @@ public class StarTreeQueryContext {
             .containsAll(multiTermsAggregationFactory.getRequestFields());
     }
 
+    private static boolean validateCompositeAggregationSupport(
+        CompositeDataCubeFieldType compositeIndexFieldInfo,
+        CompositeAggregationFactory compositeAggregationFactory
+    ) {
+        // Get all dimension field names from the star-tree
+        List<String> starTreeDimensionFields = compositeIndexFieldInfo.getDimensions().stream().map(Dimension::getField).toList();
+
+        // Validate each dimension source in the composite aggregation
+        for (CompositeValuesSourceConfig source : compositeAggregationFactory.getSources()) {
+            // Skip script-based sources (fieldType is null for scripts)
+            if (source.fieldType() == null) {
+                return false;
+            }
+
+            String fieldName = source.fieldType().name();
+
+            // Check if the field exists in star-tree dimensions
+            if (!starTreeDimensionFields.contains(fieldName)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static boolean validateNestedAggregationStructure(
         CompositeDataCubeFieldType compositeIndexFieldInfo,
         AggregatorFactory aggregatorFactory
@@ -264,6 +291,10 @@ public class StarTreeQueryContext {
             case MultiTermsAggregationFactory multiTermsAggregationFactory -> isValid = validateMultiTermsAggregationSupport(
                 compositeIndexFieldInfo,
                 multiTermsAggregationFactory
+            );
+            case CompositeAggregationFactory compositeAggregationFactory -> isValid = validateCompositeAggregationSupport(
+                compositeIndexFieldInfo,
+                compositeAggregationFactory
             );
             case null, default -> {
                 return false;

@@ -84,6 +84,17 @@ class BinaryValuesSource extends SingleDimensionValuesSource<BytesRef> {
     }
 
     @Override
+    void setCurrentValue(long ordinal, LeafReaderContext context, MappedFieldType fieldType) throws IOException {
+        // For BinaryValuesSource with star-tree, we need to look up the BytesRef from the ordinal
+        // This is similar to GlobalOrdinalValuesSource but for binary fields
+        final SortedBinaryDocValues dvs = docValuesFunc.apply(context);
+        // For now, we'll treat the ordinal as an index into the sorted binary values
+        // This assumes the field is dictionary-encoded in the star-tree
+        // TODO: This may need refinement based on how binary fields are stored in star-tree
+        throw new UnsupportedOperationException("BinaryValuesSource with star-tree is not yet supported");
+    }
+
+    @Override
     void copyCurrent(int slot) {
         values = bigArrays.grow(values, slot + 1);
         valueBuilders = bigArrays.grow(valueBuilders, slot + 1);

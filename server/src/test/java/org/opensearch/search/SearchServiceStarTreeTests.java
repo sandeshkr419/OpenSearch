@@ -49,6 +49,7 @@ import org.opensearch.search.aggregations.Aggregator;
 import org.opensearch.search.aggregations.AggregatorFactories;
 import org.opensearch.search.aggregations.AggregatorFactory;
 import org.opensearch.search.aggregations.SearchContextAggregations;
+import org.opensearch.search.aggregations.bucket.composite.TermsValuesSourceBuilder;
 import org.opensearch.search.aggregations.bucket.histogram.DateHistogramAggregationBuilder;
 import org.opensearch.search.aggregations.bucket.histogram.DateHistogramInterval;
 import org.opensearch.search.aggregations.bucket.range.RangeAggregationBuilder;
@@ -1248,6 +1249,177 @@ public class SearchServiceStarTreeTests extends OpenSearchSingleNodeTestCase {
         bulkRequest.get();
         client().admin().indices().prepareRefresh("test").get();
         client().admin().indices().prepareForceMerge("test").setMaxNumSegments(1).get();
+    }
+
+    /**
+     * Test query parsing for composite aggregations, with/without numeric term query
+     */
+    public void testQueryParsingForCompositeAggregations() throws IOException {
+        setStarTreeIndexSetting("true");
+
+        CreateIndexRequestBuilder builder = client().admin()
+            .indices()
+            .prepareCreate("test")
+            .setSettings(starStreeEnabledIndexSettings)
+            .setMapping(NumericTermsAggregatorTests.getExpandedMapping(1, false));
+        createIndex("test", builder);
+
+        IndicesService indicesService = getInstanceFromNode(IndicesService.class);
+        IndexService indexService = indicesService.indexServiceSafe(resolveIndex("test"));
+        IndexShard indexShard = indexService.getShard(0);
+        ShardSearchRequest request = new ShardSearchRequest(
+            OriginalIndices.NONE,
+            new SearchRequest().allowPartialSearchResults(true),
+            indexShard.shardId(),
+            1,
+            new AliasFilter(null, Strings.EMPTY_ARRAY),
+            1.0f,
+            -1,
+            null,
+            null
+        );
+        String KEYWORD_FIELD = "clientip";
+        String NUMERIC_FIELD = "size";
+        String UNSUPPORTED_FIELD = "city_name";
+
+        MaxAggregationBuilder maxAggNoSub = max("max").field(STATUS);
+        SumAggregationBuilder sumAggSub = sum("sum").field(STATUS).subAggregation(maxAggNoSub);
+
+        QueryBuilder baseQuery;
+        SearchContext searchContext = createSearchContext(indexService);
+        StarTreeFieldConfiguration starTreeFieldConfiguration = new StarTreeFieldConfiguration(
+            1,
+            Collections.emptySet(),
+            StarTreeFieldConfiguration.StarTreeBuildMode.ON_HEAP
+        );
+
+        // Case 1: MatchAllQuery with composite aggregation on supported dimensions, should use star tree
+        baseQuery = new MatchAllQueryBuilder();
+        SearchSourceBuilder sourceBuilder = new SearchSourceBuilder().size(0)
+            .query(baseQuery)
+            .aggregation(
+                AggregationBuilders.composite(
+                    "composite_agg",
+                    List.of(
+                        new TermsValuesSourceBuilder(KEYWORD_FIELD).field(KEYWORD_FIELD),
+                        new TermsValuesSourceBuilder(NUMERIC_FIELD).field(NUMERIC_FIELD)
+                    )
+                ).subAggregation(maxAggNoSub)
+            );
+        assertStarTreeContext(
+            request,
+            sourceBuilder,
+            getStarTreeQueryContext(
+                searchContext,
+                starTreeFieldConfiguration,
+                "startree1",
+                -1,
+                List.of(new OrdinalDimension(KEYWORD_FIELD), new NumericDimension(NUMERIC_FIELD)),
+                List.of(new Metric(STATUS, List.of(MetricStat.SUM, MetricStat.MAX))),
+                baseQuery,
+                sourceBuilder,
+                true
+            ),
+            -1
+        );
+
+        // Case 2: Composite aggregation with unsupported dimension field, should not use star tree
+        sourceBuilder = new SearchSourceBuilder().size(0)
+            .query(new MatchAllQueryBuilder())
+            .aggregation(
+                AggregationBuilders.composite(
+                    "composite_agg",
+                    List.of(
+                        new TermsValuesSourceBuilder(KEYWORD_FIELD).field(KEYWORD_FIELD),
+                        new TermsValuesSourceBuilder(UNSUPPORTED_FIELD).field(UNSUPPORTED_FIELD)
+                    )
+                ).subAggregation(maxAggNoSub)
+            );
+        assertStarTreeContext(request, sourceBuilder, null, -1);
+
+        // Case 3: NumericTermQuery with composite aggregation, should use star tree
+        baseQuery = new TermQueryBuilder(STATUS, 1);
+        sourceBuilder = new SearchSourceBuilder().size(0)
+            .query(baseQuery)
+            .aggregation(
+                AggregationBuilders.composite(
+                    "composite_agg",
+                    List.of(
+                        new TermsValuesSourceBuilder(KEYWORD_FIELD).field(KEYWORD_FIELD),
+                        new TermsValuesSourceBuilder(NUMERIC_FIELD).field(NUMERIC_FIELD)
+                    )
+                ).subAggregation(maxAggNoSub)
+            );
+        assertStarTreeContext(
+            request,
+            sourceBuilder,
+            getStarTreeQueryContext(
+                searchContext,
+                starTreeFieldConfiguration,
+                "startree1",
+                -1,
+                List.of(new OrdinalDimension(KEYWORD_FIELD), new NumericDimension(NUMERIC_FIELD), new NumericDimension(STATUS)),
+                List.of(new Metric(STATUS, List.of(MetricStat.SUM, MetricStat.MAX))),
+                baseQuery,
+                sourceBuilder,
+                true
+            ),
+            -1
+        );
+
+        // Case 4: Composite aggregation with nested metric sub-aggregation, should not use star tree
+        sourceBuilder = new SearchSourceBuilder().size(0)
+            .query(new MatchAllQueryBuilder())
+            .aggregation(
+                AggregationBuilders.composite(
+                    "composite_agg",
+                    List.of(
+                        new TermsValuesSourceBuilder(KEYWORD_FIELD).field(KEYWORD_FIELD),
+                        new TermsValuesSourceBuilder(NUMERIC_FIELD).field(NUMERIC_FIELD)
+                    )
+                ).subAggregation(sumAggSub)
+            );
+        assertStarTreeContext(request, sourceBuilder, null, -1);
+
+        // Case 5: Multiple composite aggregations, should use star tree and initialize cache
+        baseQuery = new MatchAllQueryBuilder();
+        sourceBuilder = new SearchSourceBuilder().size(0)
+            .query(baseQuery)
+            .aggregation(
+                AggregationBuilders.composite(
+                    "composite_agg1",
+                    List.of(
+                        new TermsValuesSourceBuilder(KEYWORD_FIELD).field(KEYWORD_FIELD),
+                        new TermsValuesSourceBuilder(NUMERIC_FIELD).field(NUMERIC_FIELD)
+                    )
+                ).subAggregation(maxAggNoSub)
+            )
+            .aggregation(
+                AggregationBuilders.composite(
+                    "composite_agg2",
+                    List.of(
+                        new TermsValuesSourceBuilder(NUMERIC_FIELD).field(NUMERIC_FIELD),
+                        new TermsValuesSourceBuilder(STATUS).field(STATUS)
+                    )
+                ).subAggregation(maxAggNoSub)
+            );
+        assertStarTreeContext(
+            request,
+            sourceBuilder,
+            getStarTreeQueryContext(
+                searchContext,
+                starTreeFieldConfiguration,
+                "startree1",
+                1,
+                List.of(new OrdinalDimension(KEYWORD_FIELD), new NumericDimension(NUMERIC_FIELD), new NumericDimension(STATUS)),
+                List.of(new Metric(STATUS, List.of(MetricStat.SUM, MetricStat.MAX))),
+                baseQuery,
+                sourceBuilder,
+                true
+            ),
+            0
+        );
+        setStarTreeIndexSetting(null);
     }
 
     /**

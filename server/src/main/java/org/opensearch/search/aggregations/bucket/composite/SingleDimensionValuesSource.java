@@ -97,6 +97,16 @@ public abstract class SingleDimensionValuesSource<T extends Comparable<T>> imple
     }
 
     /**
+     * Sets the current value from a star-tree ordinal/value.
+     * This is used for star-tree pre-computation where we don't have real documents to collect from.
+     *
+     * @param ordinal The ordinal or raw value from the star-tree
+     * @param context The leaf reader context
+     * @param fieldType The field type for proper value conversion (optional, can be null for non-numeric fields)
+     */
+    abstract void setCurrentValue(long ordinal, LeafReaderContext context, MappedFieldType fieldType) throws IOException;
+
+    /**
      * The current value is filled by a {@link LeafBucketCollector} that visits all the
      * values of each document. This method saves this current value in a slot and should only be used
      * in the context of a collection.

@@ -42,6 +42,7 @@ import org.opensearch.common.util.BitArray;
 import org.opensearch.common.util.DoubleArray;
 import org.opensearch.index.fielddata.SortedNumericDoubleValues;
 import org.opensearch.index.mapper.MappedFieldType;
+import org.opensearch.index.mapper.NumberFieldMapper;
 import org.opensearch.search.DocValueFormat;
 import org.opensearch.search.aggregations.LeafBucketCollector;
 import org.opensearch.search.aggregations.bucket.missing.MissingOrder;
@@ -74,6 +75,18 @@ class DoubleValuesSource extends SingleDimensionValuesSource<Double> {
         this.docValuesFunc = docValuesFunc;
         this.bits = missingBucket ? new BitArray(100, bigArrays) : null;
         this.values = bigArrays.newDoubleArray(Math.min(size, 100), false);
+    }
+
+    @Override
+    void setCurrentValue(long ordinal, LeafReaderContext context, MappedFieldType fieldType) {
+        // For DoubleValuesSource, use the field type to convert the long value to double
+        if (fieldType instanceof NumberFieldMapper.NumberFieldType numberFieldType) {
+            currentValue = numberFieldType.toDoubleValue(ordinal);
+        } else {
+            // Fallback: assume the ordinal is the double value encoded as long bits
+            currentValue = Double.longBitsToDouble(ordinal);
+        }
+        missingCurrentValue = false;
     }
 
     @Override

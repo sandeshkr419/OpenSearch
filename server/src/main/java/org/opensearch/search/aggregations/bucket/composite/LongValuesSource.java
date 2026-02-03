@@ -96,6 +96,13 @@ public class LongValuesSource extends SingleDimensionValuesSource<Long> {
     }
 
     @Override
+    void setCurrentValue(long ordinal, LeafReaderContext context, MappedFieldType fieldType) {
+        // For LongValuesSource, the ordinal from star-tree is the actual long value
+        currentValue = ordinal;
+        missingCurrentValue = false;
+    }
+
+    @Override
     void copyCurrent(int slot) {
         values = bigArrays.grow(values, slot + 1);
         if (missingBucket && missingCurrentValue) {

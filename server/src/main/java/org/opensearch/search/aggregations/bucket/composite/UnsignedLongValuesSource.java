@@ -61,6 +61,13 @@ public class UnsignedLongValuesSource extends SingleDimensionValuesSource<BigInt
     }
 
     @Override
+    void setCurrentValue(long ordinal, LeafReaderContext context, MappedFieldType fieldType) {
+        // For UnsignedLongValuesSource, the ordinal from star-tree is the unsigned long value
+        currentValue = ordinal;
+        missingCurrentValue = false;
+    }
+
+    @Override
     void copyCurrent(int slot) {
         values = bigArrays.grow(values, slot + 1);
         if (missingBucket && missingCurrentValue) {

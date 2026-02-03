@@ -86,6 +86,17 @@ class GlobalOrdinalValuesSource extends SingleDimensionValuesSource<BytesRef> {
     }
 
     @Override
+    void setCurrentValue(long ordinal, LeafReaderContext context, MappedFieldType fieldType) throws IOException {
+        // For GlobalOrdinalValuesSource, the ordinal from star-tree is the global ordinal
+        currentValue = ordinal;
+        // Initialize lookup if needed
+        if (lookup == null) {
+            final SortedSetDocValues dvs = docValuesFunc.apply(context);
+            initLookup(dvs);
+        }
+    }
+
+    @Override
     void copyCurrent(int slot) {
         values = bigArrays.grow(values, slot + 1);
         values.set(slot, currentValue);
