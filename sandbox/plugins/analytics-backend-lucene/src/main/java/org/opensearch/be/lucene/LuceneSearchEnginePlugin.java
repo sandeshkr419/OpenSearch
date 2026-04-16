@@ -17,6 +17,8 @@ import org.opensearch.analytics.spi.AggregateCapability;
 import org.opensearch.analytics.spi.AggregateFunction;
 import org.opensearch.analytics.spi.AnalyticsSearchBackendPlugin;
 import org.opensearch.analytics.spi.FieldType;
+import org.opensearch.analytics.spi.FilterCapability;
+import org.opensearch.analytics.spi.FilterOperator;
 import org.opensearch.analytics.spi.FragmentConvertor;
 import org.opensearch.analytics.spi.OperatorCapability;
 import org.opensearch.common.annotation.ExperimentalApi;
@@ -111,6 +113,40 @@ public class LuceneSearchEnginePlugin extends Plugin
             AggregateCapability.simple(AggregateFunction.AVG, FieldType.LONG, formats),
             AggregateCapability.simple(AggregateFunction.AVG, FieldType.DOUBLE, formats)
         );
+    }
+
+    @Override
+    public java.util.Set<FilterCapability> filterCapabilities() {
+        java.util.Set<String> luceneFormat = java.util.Set.of("lucene");
+        java.util.Set<FilterCapability> caps = new java.util.HashSet<>();
+
+        // Standard comparisons on keyword fields (inverted index)
+        for (FieldType ft : FieldType.keyword()) {
+            caps.add(new FilterCapability.Standard(FilterOperator.EQUALS, ft, luceneFormat));
+            caps.add(new FilterCapability.Standard(FilterOperator.NOT_EQUALS, ft, luceneFormat));
+            caps.add(new FilterCapability.Standard(FilterOperator.LIKE, ft, luceneFormat));
+            caps.add(new FilterCapability.Standard(FilterOperator.PREFIX, ft, luceneFormat));
+            caps.add(new FilterCapability.Standard(FilterOperator.IN, ft, luceneFormat));
+            caps.add(new FilterCapability.Standard(FilterOperator.IS_NULL, ft, luceneFormat));
+            caps.add(new FilterCapability.Standard(FilterOperator.IS_NOT_NULL, ft, luceneFormat));
+        }
+
+        // Standard comparisons on text fields (inverted index)
+        for (FieldType ft : FieldType.text()) {
+            caps.add(new FilterCapability.Standard(FilterOperator.EQUALS, ft, luceneFormat));
+            caps.add(new FilterCapability.Standard(FilterOperator.LIKE, ft, luceneFormat));
+        }
+
+        // Full-text search on keyword and text fields
+        for (FieldType ft : java.util.stream.Stream.concat(
+                FieldType.keyword().stream(), FieldType.text().stream()).collect(java.util.stream.Collectors.toSet())) {
+            caps.add(new FilterCapability.FullText(FilterOperator.MATCH, ft, luceneFormat, java.util.Set.of()));
+            caps.add(new FilterCapability.FullText(FilterOperator.WILDCARD, ft, luceneFormat, java.util.Set.of()));
+            caps.add(new FilterCapability.FullText(FilterOperator.REGEXP, ft, luceneFormat, java.util.Set.of()));
+            caps.add(new FilterCapability.FullText(FilterOperator.FUZZY, ft, luceneFormat, java.util.Set.of()));
+        }
+
+        return java.util.Collections.unmodifiableSet(caps);
     }
 
     @Override

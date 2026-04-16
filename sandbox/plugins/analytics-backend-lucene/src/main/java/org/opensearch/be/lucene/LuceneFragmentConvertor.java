@@ -9,43 +9,51 @@
 package org.opensearch.be.lucene;
 
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.logical.LogicalFilter;
 import org.opensearch.analytics.spi.FragmentConvertor;
-import org.opensearch.common.io.stream.BytesStreamOutput;
-import org.opensearch.core.common.bytes.BytesReference;
+import org.opensearch.be.lucene.predicate.QueryBuilderSerializer;
 import org.opensearch.index.query.MatchAllQueryBuilder;
 
-import java.io.IOException;
-
 /**
- * Minimal {@link FragmentConvertor} for the Lucene backend.
+ * {@link FragmentConvertor} for the Lucene backend.
  *
- * <p>MVP: serializes a {@link MatchAllQueryBuilder} as the fragment bytes for all
- * fragment types. The Lucene backend on the data node deserializes these bytes
- * back into a QueryBuilder and uses it to drive shard-level execution.
- *
- * <p>Future: walk the stripped RelNode to extract filter predicates, projections,
- * and sort orders, and produce a more specific QueryBuilder + field list.
+ * <p>Converts RelNode fragments into serialized QueryBuilder bytes:
+ * <ul>
+ *   <li>If the fragment contains a {@link LogicalFilter}, extracts the
+ *       filter condition and converts it via {@link LuceneFilterExecutor#convertFragment}
+ *       using the {@link org.opensearch.be.lucene.predicate.PredicateHandlerRegistry}.</li>
+ *   <li>If the fragment has no filter (e.g., a bare scan), falls back to
+ *       {@link MatchAllQueryBuilder} (match all documents).</li>
+ * </ul>
  *
  * @opensearch.internal
  */
 public class LuceneFragmentConvertor implements FragmentConvertor {
 
+    private final LuceneFilterExecutor filterExecutor = new LuceneFilterExecutor();
+
     @Override
     public byte[] convertScanFragment(String tableName, RelNode fragment) {
-        return serializeMatchAll();
+        return convertOrMatchAll(fragment);
     }
 
     @Override
     public byte[] convertShuffleReadFragment(String tableName, RelNode fragment) {
-        return serializeMatchAll();
+        return convertOrMatchAll(fragment);
     }
 
-    private static byte[] serializeMatchAll() {
-        try (BytesStreamOutput out = new BytesStreamOutput()) {
-            out.writeNamedWriteable(new MatchAllQueryBuilder());
-            return BytesReference.toBytes(out.bytes());
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to serialize MatchAllQueryBuilder", e);
+    private byte[] convertOrMatchAll(RelNode fragment) {
+        if (fragment instanceof LogicalFilter) {
+            return filterExecutor.convertFragment(fragment);
         }
+        // Walk children — the filter might be nested under a project
+        for (RelNode input : fragment.getInputs()) {
+            if (input instanceof LogicalFilter) {
+                return filterExecutor.convertFragment(input);
+            }
+        }
+        // TODO: throw an error instead of match all case.
+        // Falling back to match all case temporarily
+        return QueryBuilderSerializer.serialize(new MatchAllQueryBuilder());
     }
 }

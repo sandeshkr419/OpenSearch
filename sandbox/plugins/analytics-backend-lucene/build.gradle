@@ -6,6 +6,8 @@
  * compatible open source license.
  */
 
+def calciteVersion = '1.41.0'
+
 apply plugin: 'opensearch.internal-cluster-test'
 
 opensearchplugin {
@@ -18,13 +20,63 @@ dependencies {
     // Provided at runtime by the parent analytics-engine plugin (via extendedPlugins).
     compileOnly project(':sandbox:libs:analytics-framework')
 
+    // Arrow Flight streaming transport (for BufferAllocator, VectorSchemaRoot)
+    api project(':plugins:arrow-flight-rpc')
+
+    // Calcite (needed for RexNode, RelNode, SqlStdOperatorTable at compile time)
+    compileOnly "org.apache.calcite:calcite-core:${calciteVersion}"
+
     compileOnly "org.apache.logging.log4j:log4j-api:${versions.log4j}"
     compileOnly "org.apache.logging.log4j:log4j-core:${versions.log4j}"
+
+    // Annotation dependencies
+    compileOnly 'org.checkerframework:checker-qual:3.43.0'
+    compileOnly 'org.apiguardian:apiguardian-api:1.1.2'
+
+    // jqwik for property-based tests
+    testImplementation 'net.jqwik:jqwik-api:1.9.1'
+    testRuntimeOnly 'net.jqwik:jqwik-engine:1.9.1'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.11.1'
+    testImplementation 'org.assertj:assertj-core:3.26.3'
+
+    // Arrow memory for tests
+    testRuntimeOnly "org.apache.arrow:arrow-memory-unsafe:${versions.arrow}"
+
+    // Calcite at test time
+    testImplementation "org.apache.calcite:calcite-core:${calciteVersion}"
+    testImplementation "org.apache.calcite:calcite-linq4j:${calciteVersion}"
+    testImplementation "org.apache.calcite.avatica:avatica-core:1.27.0"
+    testRuntimeOnly "org.jooq:joou-java-6:0.9.4"
+    testRuntimeOnly "com.google.guava:guava:${versions.guava}"
+    testRuntimeOnly "com.google.guava:failureaccess:1.0.2"
+    testRuntimeOnly "com.jayway.jsonpath:json-path:2.9.0"
+    testRuntimeOnly "org.apache.commons:commons-math3:3.6.1"
+    testRuntimeOnly "commons-codec:commons-codec:${versions.commonscodec}"
+    testCompileOnly 'org.checkerframework:checker-qual:3.43.0'
+    testCompileOnly 'org.apiguardian:apiguardian-api:1.1.2'
+
+    // Mockito
+    testImplementation "org.mockito:mockito-core:${versions.mockito}"
+    testRuntimeOnly "net.bytebuddy:byte-buddy:${versions.bytebuddy}"
+    testRuntimeOnly "org.objenesis:objenesis:${versions.objenesis}"
+}
+
+configurations.all {
+    resolutionStrategy {
+        force 'com.google.guava:guava:33.4.0-jre'
+        force 'com.google.guava:failureaccess:1.0.2'
+        force 'com.google.errorprone:error_prone_annotations:2.36.0'
+        force 'org.checkerframework:checker-qual:3.43.0'
+        force "com.fasterxml.jackson.core:jackson-core:${versions.jackson}"
+        force "com.fasterxml.jackson.core:jackson-databind:${versions.jackson_databind}"
+        force "com.fasterxml.jackson.core:jackson-annotations:${versions.jackson_annotations}"
+        force "org.slf4j:slf4j-api:${versions.slf4j}"
+    }
 }
 
 test {
+    useJUnitPlatform()
     systemProperty 'tests.security.manager', 'false'
+    jvmArgs '--add-opens=java.base/java.nio=ALL-UNNAMED'
+    jvmArgs '-Darrow.memory.debug.allocator=false'
 }
-
-// TODO: Remove once back-end is built out with test suite
-testingConventions.enabled = false
