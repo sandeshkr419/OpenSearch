@@ -18,6 +18,7 @@ import org.apache.calcite.rel.core.Project;
 import org.apache.calcite.rel.logical.LogicalProject;
 import org.apache.calcite.rel.metadata.RelMetadataQuery;
 import org.apache.calcite.rel.type.RelDataType;
+import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexNode;
 import org.opensearch.analytics.planner.RelNodeUtils;
@@ -132,5 +133,23 @@ public class OpenSearchProject extends Project implements OpenSearchRelNode {
             }
         }
         return LogicalProject.create(strippedChildren.getFirst(), List.of(), strippedExprs, getRowType());
+    }
+
+    /** Recursively strips {@link AnnotatedProjectExpression} wrappers from a RexNode tree. */
+    private static RexNode stripRexAnnotations(RexNode node) {
+        if (node instanceof AnnotatedProjectExpression annotated) {
+            return stripRexAnnotations(annotated.unwrap());
+        }
+        if (node instanceof RexCall call) {
+            boolean changed = false;
+            List<RexNode> newOperands = new ArrayList<>(call.getOperands().size());
+            for (RexNode operand : call.getOperands()) {
+                RexNode stripped = stripRexAnnotations(operand);
+                newOperands.add(stripped);
+                if (stripped != operand) changed = true;
+            }
+            return changed ? call.clone(call.getType(), newOperands) : call;
+        }
+        return node;
     }
 }

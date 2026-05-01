@@ -11,6 +11,7 @@ package org.opensearch.analytics.planner;
 import org.opensearch.analytics.spi.AggregateCapability;
 import org.opensearch.analytics.spi.AggregateFunction;
 import org.opensearch.analytics.spi.AnalyticsSearchBackendPlugin;
+import org.opensearch.common.Nullable;
 import org.opensearch.analytics.spi.BackendCapabilityProvider;
 import org.opensearch.analytics.spi.DelegationType;
 import org.opensearch.analytics.spi.EngineCapability;
@@ -73,6 +74,9 @@ public class CapabilityRegistry {
     private final Map<DelegationType, List<String>> delegationAcceptors = new HashMap<>();
     private final Map<FullTextParamKey, Set<String>> fullTextParamIndex = new HashMap<>();
 
+    // Decomposition index: (backendName, AggregateFunction) → AggregateDecomposition
+    private final Map<DecompositionKey, org.opensearch.analytics.spi.AggregateDecomposition> decompositionIndex = new HashMap<>();
+
     private final Function<IndexMetadata, FieldStorageResolver> fieldStorageFactory;
 
     // Backends that declared any capability for each operator — O(1) membership check
@@ -131,6 +135,9 @@ public class CapabilityRegistry {
             for (AggregateCapability cap : caps.aggregateCapabilities()) {
                 for (FieldType fieldType : cap.fieldTypes()) {
                     addToFormatMap(aggregateIndex, new AggregateKey(cap.function(), fieldType), cap.formats(), name);
+                }
+                if (cap.decomposition() != null) {
+                    decompositionIndex.put(new DecompositionKey(name, cap.function()), cap.decomposition());
                 }
                 aggregateCapableBackends.add(name);
             }
@@ -290,6 +297,12 @@ public class CapabilityRegistry {
         return backend;
     }
 
+    /** Returns the decomposition for the given backend+function, or null if none registered. */
+    @Nullable
+    public org.opensearch.analytics.spi.AggregateDecomposition getDecomposition(String backendName, AggregateFunction function) {
+        return decompositionIndex.get(new DecompositionKey(backendName, function));
+    }
+
     public FieldStorageResolver resolveFieldStorage(IndexMetadata indexMetadata) {
         return fieldStorageFactory.apply(indexMetadata);
     }
@@ -323,5 +336,8 @@ public class CapabilityRegistry {
     }
 
     private record FullTextParamKey(ScalarFunction function, FieldType fieldType, String backendName) {
+    }
+
+    private record DecompositionKey(String backendName, AggregateFunction function) {
     }
 }

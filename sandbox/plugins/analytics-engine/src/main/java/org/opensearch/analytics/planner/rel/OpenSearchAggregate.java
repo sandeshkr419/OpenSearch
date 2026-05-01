@@ -17,6 +17,8 @@ import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.rel.logical.LogicalAggregate;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.util.ImmutableBitSet;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.opensearch.analytics.planner.RelNodeUtils;
 import org.opensearch.analytics.spi.FieldStorageInfo;
 
@@ -31,6 +33,7 @@ import java.util.function.Function;
  */
 public class OpenSearchAggregate extends Aggregate implements OpenSearchRelNode {
 
+    private static final Logger LOGGER = LogManager.getLogger(OpenSearchAggregate.class);
     private final List<String> viableBackends;
     private final AggregateMode mode;
 
@@ -191,21 +194,12 @@ public class OpenSearchAggregate extends Aggregate implements OpenSearchRelNode 
             // to replace delegated AggregateCallAnnotations with placeholders instead
             // of just filtering them out.
             List<RexNode> cleanRexList = aggCall.rexList.stream().filter(rex -> !(rex instanceof AggregateCallAnnotation)).toList();
-            strippedCalls.add(
-                AggregateCall.create(
-                    aggCall.getAggregation(),
-                    aggCall.isDistinct(),
-                    aggCall.isApproximate(),
-                    aggCall.ignoreNulls(),
-                    cleanRexList,
-                    aggCall.getArgList(),
-                    aggCall.filterArg,
-                    aggCall.distinctKeys,
-                    aggCall.collation,
-                    aggCall.type,
-                    aggCall.name
-                )
+            AggregateCall tempCall = AggregateCall.create(
+                aggCall.getAggregation(), aggCall.isDistinct(), aggCall.isApproximate(),
+                aggCall.ignoreNulls(), cleanRexList, aggCall.getArgList(), aggCall.filterArg,
+                aggCall.distinctKeys, aggCall.collation, aggCall.type, aggCall.name
             );
+            strippedCalls.add(tempCall);
         }
         return LogicalAggregate.create(strippedChildren.getFirst(), List.of(), getGroupSet(), getGroupSets(), strippedCalls);
     }
