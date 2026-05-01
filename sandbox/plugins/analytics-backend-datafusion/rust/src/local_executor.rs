@@ -221,7 +221,12 @@ impl PhysicalOptimizerRule for StripFinalAggregateRule {
         use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
 
         if let Some(final_agg) = plan.as_any().downcast_ref::<AggregateExec>() {
-            if matches!(final_agg.mode(), AggregateMode::Final | AggregateMode::FinalPartitioned) {
+            if matches!(final_agg.mode(), AggregateMode::Final | AggregateMode::FinalPartitioned)
+                // Only strip for scalar aggregates (no group-by keys).
+                // With group-by, the shard's Final correctly computes per-group partial
+                // states before sending to the coordinator — stripping it would lose grouping.
+                && final_agg.group_expr().is_empty()
+            {
                 // Strip the Final aggregate — return its input (the Partial), recursively optimized
                 return self.optimize(Arc::clone(final_agg.input()), _config);
             }
@@ -256,7 +261,13 @@ impl PhysicalOptimizerRule for StripPartialAggregateRule {
         use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
 
         if let Some(final_agg) = plan.as_any().downcast_ref::<AggregateExec>() {
-            if matches!(final_agg.mode(), AggregateMode::Final | AggregateMode::FinalPartitioned) {
+            if matches!(final_agg.mode(), AggregateMode::Final | AggregateMode::FinalPartitioned)
+                // Only strip for scalar aggregates (no group-by keys).
+                // With group-by, the coordinator's Partial correctly re-groups incoming
+                // partial states by key before Final merges within each group — stripping
+                // it would give Final un-grouped rows, producing wrong results.
+                && final_agg.group_expr().is_empty()
+            {
                 // Walk through CoalescePartitionsExec/RepartitionExec to find the Partial
                 if let Some(partial_input) = find_partial_agg_input(final_agg.input()) {
                     let partial_input = Arc::clone(partial_input);

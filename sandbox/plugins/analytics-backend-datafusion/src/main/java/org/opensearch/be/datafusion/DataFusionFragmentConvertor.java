@@ -96,7 +96,7 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         Plan inner = decodePlan(innerBytes);
         Rel wrapper = convertStandalone(partialAggFragment);
         Plan rewired = rewire(inner, wrapper);
-        return withInitialToIntermediatePhaseForApproxCountDistinct(serializePlan(rewired));
+        return serializePlan(rewired);
     }
 
     @Override
@@ -104,8 +104,7 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         LOGGER.debug("Converting final-aggregate fragment");
         RelNode fixed = fixApproxCountDistinctInputType(fragment);
         RelNode rewritten = rewriteStageInputScans(fixed);
-        byte[] bytes = convertToSubstrait(rewritten);
-        return withIntermediatePhaseForApproxCountDistinct(bytes);
+        return convertToSubstrait(rewritten);
     }
 
     @Override
@@ -328,60 +327,6 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
     }
 
     // ── Visitor wiring ──────────────────────────────────────────────────────────
-
-    /**
-     * Sets {@code INTERMEDIATE_TO_RESULT} phase on any {@code approx_count_distinct}
-     * measures in the Substrait plan. This tells DataFusion to merge HLL sketches
-     * (from the partial stage) rather than treating them as new values to hash.
-     */
-    private byte[] withInitialToIntermediatePhaseForApproxCountDistinct(byte[] bytes) {
-        return rewriteApproxCountDistinctPhase(bytes,
-            Expression.AggregationPhase.INITIAL_TO_RESULT,
-            Expression.AggregationPhase.INITIAL_TO_INTERMEDIATE);
-    }
-
-    private byte[] withIntermediatePhaseForApproxCountDistinct(byte[] bytes) {
-        return rewriteApproxCountDistinctPhase(bytes,
-            Expression.AggregationPhase.INITIAL_TO_RESULT,
-            Expression.AggregationPhase.INTERMEDIATE_TO_RESULT);
-    }
-
-    private byte[] rewriteApproxCountDistinctPhase(byte[] bytes,
-            Expression.AggregationPhase from, Expression.AggregationPhase to) {
-        Plan plan = decodePlan(bytes);
-        boolean[] changed = { false };
-        List<Plan.Root> newRoots = new ArrayList<>();
-        for (Plan.Root root : plan.getRoots()) {
-            Rel rel = rewriteAggPhase(root.getInput(), changed, from, to);
-            newRoots.add(changed[0] ? Plan.Root.builder().from(root).input(rel).build() : root);
-        }
-        if (!changed[0]) return bytes;
-        return serializePlan(Plan.builder().from(plan).roots(newRoots).build());
-    }
-
-    private static Rel rewriteAggPhase(Rel rel, boolean[] changed,
-            Expression.AggregationPhase from, Expression.AggregationPhase to) {
-        if (rel instanceof Aggregate agg) {
-            List<Aggregate.Measure> newMeasures = new ArrayList<>(agg.getMeasures().size());
-            boolean aggChanged = false;
-            for (Aggregate.Measure m : agg.getMeasures()) {
-                if ("approx_count_distinct".equals(m.getFunction().declaration().name())
-                    && m.getFunction().aggregationPhase() == from) {
-                    AggregateFunctionInvocation fn = AggregateFunctionInvocation.builder()
-                        .from(m.getFunction()).aggregationPhase(to).build();
-                    newMeasures.add(Aggregate.Measure.builder().from(m).function(fn).build());
-                    aggChanged = true;
-                } else {
-                    newMeasures.add(m);
-                }
-            }
-            if (aggChanged) {
-                changed[0] = true;
-                return Aggregate.builder().from(agg).measures(newMeasures).build();
-            }
-        }
-        return rel;
-    }
 
     private SubstraitRelVisitor createVisitor(RelNode relNode) {
         RelDataTypeFactory typeFactory = relNode.getCluster().getTypeFactory();
