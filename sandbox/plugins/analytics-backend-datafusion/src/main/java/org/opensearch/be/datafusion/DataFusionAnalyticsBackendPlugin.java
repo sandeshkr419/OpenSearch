@@ -68,6 +68,7 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
         AggregateFunction.MIN,
         AggregateFunction.MAX,
         AggregateFunction.COUNT,
+        AggregateFunction.AVG,
         AggregateFunction.APPROX_COUNT_DISTINCT
     );
 
@@ -126,6 +127,8 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
                     for (FieldType type : SUPPORTED_FIELD_TYPES) {
                         if (func == AggregateFunction.APPROX_COUNT_DISTINCT) {
                             caps.add(AggregateCapability.approximate(func, Set.of(type), formats));
+                        } else if (func == AggregateFunction.AVG) {
+                            caps.add(new AggregateCapability(func, Set.of(type), formats, AvgDecomposition.INSTANCE));
                         } else {
                             caps.add(AggregateCapability.simple(func, Set.of(type), formats));
                         }

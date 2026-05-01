@@ -242,6 +242,26 @@ public class CoordinatorReduceIT extends OpenSearchIntegTestCase {
         client().admin().indices().prepareFlush(indexName).get();
     }
 
+    /**
+     * Tests AVG across shards using the decomposition path (SUM+COUNT partial, SUM/COUNT final).
+     */
+    public void testAvgAcrossShards() throws Exception {
+        createParquetBackedIndex();
+        indexDeterministicDocs();
+
+        PPLResponse response = executePPL("source = " + INDEX + " | stats avg(value) as a");
+
+        assertNotNull("PPLResponse must not be null", response);
+        assertTrue("columns must contain 'a', got " + response.getColumns(), response.getColumns().contains("a"));
+        assertEquals("scalar agg must return exactly 1 row", 1, response.getRows().size());
+
+        int idx = response.getColumns().indexOf("a");
+        Object cell = response.getRows().get(0)[idx];
+        assertNotNull("AVG(value) cell must not be null", cell);
+        double actual = ((Number) cell).doubleValue();
+        assertEquals("AVG(value) across shards should be " + VALUE, (double) VALUE, actual, 0.001);
+    }
+
     private PPLResponse executePPL(String ppl) {
         return client().execute(UnifiedPPLExecuteAction.INSTANCE, new PPLRequest(ppl)).actionGet();
     }
