@@ -443,4 +443,6 @@ public final class NativeBridge {
     public static void cacheManagerRemoveFiles(long runtimePtr, String[] filePaths) {}
 
     public static void initLogger() {}
+
+    private NativeBridge() {}
 }
