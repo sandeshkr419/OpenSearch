@@ -90,7 +90,7 @@ pub async fn execute_query(
         .with_config(config)
         .with_runtime_env(Arc::from(runtime_env))
         .with_default_features()
-        .with_physical_optimizer_rules(crate::local_executor::shard_physical_optimizer_rules())
+        .with_physical_optimizer_rules(crate::local_executor::physical_optimizer_rules_without_combine())
         .build();
 
     let ctx = SessionContext::new_with_state(state);
@@ -125,13 +125,28 @@ pub async fn execute_query(
     })?;
 
     // Decode substrait → logical plan → physical plan → stream
-    let substrait_plan = Plan::decode(plan_bytes.as_slice()).map_err(|e| {
+    // Read the 1-byte mode prefix set by DataFusionFragmentConvertor:
+    //   0x01 = partial (force AggregateMode::Partial for scalar aggregates)
+    //   other/missing  = default (no mode forcing)
+    let (mode_byte, substrait_bytes) = if plan_bytes.is_empty() {
+        (0u8, plan_bytes.as_slice())
+    } else {
+        (plan_bytes[0], &plan_bytes[1..])
+    };
+
+    let substrait_plan = Plan::decode(substrait_bytes).map_err(|e| {
         DataFusionError::Execution(format!("Failed to decode Substrait: {}", e))
     })?;
 
     let logical_plan = from_substrait_plan(&ctx.state(), &substrait_plan).await?;
     let dataframe = ctx.execute_logical_plan(logical_plan).await?;
-    let physical_plan = dataframe.create_physical_plan().await?;
+    let mut physical_plan = dataframe.create_physical_plan().await?;
+
+    if mode_byte == 0x01 {
+        physical_plan = crate::local_executor::force_aggregate_mode(
+            physical_plan, crate::local_executor::AggregateMode::Partial
+        )?;
+    }
 
     let df_stream = execute_stream(physical_plan, ctx.task_ctx()).map_err(|e| {
         error!("Failed to create execution stream: {}", e);

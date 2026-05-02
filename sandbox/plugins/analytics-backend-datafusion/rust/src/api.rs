@@ -563,7 +563,21 @@ pub async unsafe fn execute_local_plan(
     // `context_id` of 0 disables tracking (pool is not consulted).
     let query_context = QueryTrackingContext::new(context_id, session.memory_pool());
 
-    let df_stream = session.execute_substrait(substrait_bytes).await?;
+    // Read the 1-byte mode prefix set by DataFusionFragmentConvertor:
+    //   0x01 = partial (shard emits intermediate state)
+    //   0x02 = final   (coordinator merges partial state)
+    //   other/missing  = default (no mode forcing)
+    let (mode_byte, plan_bytes) = if substrait_bytes.is_empty() {
+        (0u8, substrait_bytes)
+    } else {
+        (substrait_bytes[0], &substrait_bytes[1..])
+    };
+
+    let df_stream = match mode_byte {
+        0x01 => session.execute_partial_substrait(plan_bytes).await?,
+        0x02 => session.execute_final_substrait(plan_bytes).await?,
+        _    => session.execute_substrait(plan_bytes).await?,
+    };
 
     // Wrap the output in the same CrossRtStream + RecordBatchStreamAdapter
     // shape as `execute_query`, so existing `stream_next` / `stream_close`

@@ -37,6 +37,8 @@ use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::{SendableRecordBatchStream, SessionStateBuilder};
 use datafusion::physical_plan::streaming::PartitionStream;
 use datafusion::prelude::{SessionConfig, SessionContext};
+pub use datafusion::physical_plan::aggregates::AggregateMode;
+use datafusion::physical_plan::aggregates::AggregateExec;
 use datafusion_physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
@@ -69,13 +71,11 @@ impl LocalSession {
         // the caller. `RuntimeEnv` internally holds `Arc`s — this is a
         // lightweight clone, not a deep copy of the pool or disk manager.
         let runtime_env = Arc::new(runtime_env.clone());
-        let mut rules = physical_optimizer_rules_without_combine();
-        rules.push(Arc::new(StripPartialAggregateRule));
         let state = SessionStateBuilder::new()
             .with_config(SessionConfig::new())
             .with_runtime_env(runtime_env)
             .with_default_features()
-            .with_physical_optimizer_rules(rules)
+            .with_physical_optimizer_rules(physical_optimizer_rules_without_combine())
             .build();
         let ctx = SessionContext::new_with_state(state);
         // Register approx_count_distinct as an alias for approx_distinct so that
@@ -162,6 +162,47 @@ impl LocalSession {
             .await
     }
 
+    /// Executes a Substrait plan in partial-aggregate mode.
+    ///
+    /// After building the physical plan, replaces any `Single` mode `AggregateExec`
+    /// with `Partial` mode so the shard emits intermediate state (e.g. HLL sketch
+    /// bytes) rather than the final result. Called by the shard execution path via
+    /// `attachPartialAggOnTop` in `DataFusionFragmentConvertor`.
+    pub async fn execute_partial_substrait(
+        &self,
+        bytes: &[u8],
+    ) -> Result<SendableRecordBatchStream, DataFusionError> {
+        self.execute_substrait_with_agg_mode(bytes, AggregateMode::Partial).await
+    }
+
+    /// Executes a Substrait plan in final-aggregate mode.
+    ///
+    /// After building the physical plan, replaces any `Single` mode `AggregateExec`
+    /// with `Final` mode so the coordinator merges incoming partial state from shards.
+    /// Called by the coordinator execution path via `convertFinalAggFragment`.
+    pub async fn execute_final_substrait(
+        &self,
+        bytes: &[u8],
+    ) -> Result<SendableRecordBatchStream, DataFusionError> {
+        self.execute_substrait_with_agg_mode(bytes, AggregateMode::Final).await
+    }
+
+    async fn execute_substrait_with_agg_mode(
+        &self,
+        bytes: &[u8],
+        mode: AggregateMode,
+    ) -> Result<SendableRecordBatchStream, DataFusionError> {
+        let plan = Plan::decode(bytes).map_err(|e| {
+            DataFusionError::Execution(format!("Failed to decode Substrait plan: {}", e))
+        })?;
+        let logical_plan = from_substrait_plan(&self.ctx.state(), &plan).await?;
+        let df = self.ctx.execute_logical_plan(logical_plan).await?;
+        let physical_plan = df.create_physical_plan().await?;
+        let physical_plan = force_aggregate_mode(physical_plan, mode)?;
+        let task_ctx = self.ctx.task_ctx();
+        datafusion::physical_plan::execute_stream(physical_plan, task_ctx)
+    }
+
     /// Returns the memory pool the session's `RuntimeEnv` was built with.
     ///
     /// Used by the bridge layer to seed a per-query tracking context so
@@ -175,6 +216,70 @@ impl LocalSession {
 /// Returns the default physical optimizer rules with [`CombinePartialFinalAggregate`] removed.
 /// DataFusion's combine rule recombines partial+final aggregates in the same process,
 /// undoing the distributed split. We disable it so each side runs independently.
+/// Walks a physical plan and replaces `Single`/`SinglePartitioned` mode `AggregateExec`
+/// nodes with the given `target_mode`. Used by `execute_partial_substrait` and
+/// `execute_final_substrait` to force the correct aggregation phase without relying
+/// on physical optimizer rules.
+///
+/// Only scalar aggregates (no group-by keys) are rewritten — group-by aggregates
+/// use DataFusion's native `Final(Partial(...))` structure which correctly re-groups
+/// partial states per key.
+pub fn force_aggregate_mode(
+    plan: Arc<dyn datafusion::physical_plan::ExecutionPlan>,
+    target_mode: AggregateMode,
+) -> datafusion_common::Result<Arc<dyn datafusion::physical_plan::ExecutionPlan>> {
+    if let Some(agg) = plan.as_any().downcast_ref::<AggregateExec>() {
+        // DataFusion's physical planner creates Final(Partial(...)) pairs.
+        // For scalar aggregates (no group-by), we force the target mode:
+        // - Partial: strip the Final, keep only the Partial (shard emits intermediate state)
+        // - Final: strip the Partial, connect Final directly to its input (coordinator merges)
+        if agg.group_expr().is_empty() {
+            match target_mode {
+                AggregateMode::Partial => {
+                    // Strip Final → recurse into its input (the Partial)
+                    if matches!(agg.mode(), AggregateMode::Final | AggregateMode::FinalPartitioned) {
+                        return force_aggregate_mode(Arc::clone(agg.input()), target_mode);
+                    }
+                }
+                AggregateMode::Final => {
+                    // Strip Partial → connect Final directly to Partial's input
+                    if matches!(agg.mode(), AggregateMode::Final | AggregateMode::FinalPartitioned) {
+                        if let Some(partial_input) = find_partial_input(agg.input()) {
+                            let coalesced = Arc::new(
+                                datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec::new(partial_input)
+                            );
+                            return Ok(plan.with_new_children(vec![coalesced])?);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let new_children: datafusion_common::Result<Vec<_>> = plan
+        .children()
+        .into_iter()
+        .map(|c| force_aggregate_mode(Arc::clone(c), target_mode))
+        .collect();
+    plan.with_new_children(new_children?)
+}
+
+/// Walks through single-child passthrough nodes (CoalescePartitions, Repartition)
+/// to find a Partial AggregateExec, then returns its input.
+fn find_partial_input(
+    plan: &Arc<dyn datafusion::physical_plan::ExecutionPlan>,
+) -> Option<Arc<dyn datafusion::physical_plan::ExecutionPlan>> {
+    if let Some(agg) = plan.as_any().downcast_ref::<AggregateExec>() {
+        if matches!(agg.mode(), AggregateMode::Partial) {
+            return Some(Arc::clone(agg.input()));
+        }
+    }
+    if plan.children().len() == 1 {
+        return find_partial_input(plan.children()[0]);
+    }
+    None
+}
+
 pub fn physical_optimizer_rules_without_combine(
 ) -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
     let combine_name = CombinePartialFinalAggregate::new().name().to_string();
@@ -185,16 +290,6 @@ pub fn physical_optimizer_rules_without_combine(
         .collect()
 }
 
-/// Physical optimizer rules for shard execution: removes `CombinePartialFinalAggregate`
-/// and adds `StripFinalAggregateRule` so the shard emits partial intermediate state
-/// (e.g. HLL sketch bytes) instead of the final aggregated result.
-pub fn shard_physical_optimizer_rules(
-) -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
-    let mut rules = physical_optimizer_rules_without_combine();
-    rules.push(Arc::new(StripFinalAggregateRule));
-    rules
-}
-
 /// Registers `approx_count_distinct` as an alias for DataFusion's `approx_distinct`.
 ///
 /// Substrait plans produced by isthmus use the Substrait spec name `approx_count_distinct`,
@@ -203,110 +298,6 @@ pub fn register_approx_count_distinct_alias(ctx: &SessionContext) {
     ctx.register_udaf(
         Arc::unwrap_or_clone(approx_distinct_udaf()).with_aliases(["approx_count_distinct"]),
     );
-}
-
-/// Physical optimizer rule that strips the `Final`/`FinalPartitioned` aggregate from a
-/// `Final(AggregateExec) → Partial(AggregateExec)` pair, leaving only the `Partial`.
-///
-/// Used for shard execution: the shard emits partial intermediate state (e.g. HLL sketch
-/// bytes for approx_distinct) rather than the final result.
-#[derive(Debug)]
-pub struct StripFinalAggregateRule;
-
-impl PhysicalOptimizerRule for StripFinalAggregateRule {
-    fn optimize(
-        &self,
-        plan: Arc<dyn datafusion::physical_plan::ExecutionPlan>,
-        _config: &datafusion_common::config::ConfigOptions,
-    ) -> datafusion_common::Result<Arc<dyn datafusion::physical_plan::ExecutionPlan>> {
-        use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
-
-        if let Some(final_agg) = plan.as_any().downcast_ref::<AggregateExec>() {
-            if matches!(final_agg.mode(), AggregateMode::Final | AggregateMode::FinalPartitioned)
-                // Only strip for scalar aggregates (no group-by keys).
-                // With group-by, the shard's Final correctly computes per-group partial
-                // states before sending to the coordinator — stripping it would lose grouping.
-                && final_agg.group_expr().is_empty()
-            {
-                // Strip the Final aggregate — return its input (the Partial), recursively optimized
-                return self.optimize(Arc::clone(final_agg.input()), _config);
-            }
-        }
-        let new_children: datafusion_common::Result<Vec<_>> = plan
-            .children()
-            .into_iter()
-            .map(|c| self.optimize(Arc::clone(c), _config))
-            .collect();
-        plan.with_new_children(new_children?)
-    }
-
-    fn name(&self) -> &str { "StripFinalAggregateRule" }
-    fn schema_check(&self) -> bool { false }
-}
-
-/// Physical optimizer rule that strips the `Partial` aggregate from a
-/// `Final(AggregateExec) → Partial(AggregateExec)` pair, connecting `Final` directly
-/// to the `Partial`'s input.
-///
-/// Used for coordinator execution: the coordinator receives partial intermediate state
-/// (e.g. HLL sketch bytes) from shards and needs to run only the `Final` merge step.
-#[derive(Debug)]
-pub struct StripPartialAggregateRule;
-
-impl PhysicalOptimizerRule for StripPartialAggregateRule {
-    fn optimize(
-        &self,
-        plan: Arc<dyn datafusion::physical_plan::ExecutionPlan>,
-        _config: &datafusion_common::config::ConfigOptions,
-    ) -> datafusion_common::Result<Arc<dyn datafusion::physical_plan::ExecutionPlan>> {
-        use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
-
-        if let Some(final_agg) = plan.as_any().downcast_ref::<AggregateExec>() {
-            if matches!(final_agg.mode(), AggregateMode::Final | AggregateMode::FinalPartitioned)
-                // Only strip for scalar aggregates (no group-by keys).
-                // With group-by, the coordinator's Partial correctly re-groups incoming
-                // partial states by key before Final merges within each group — stripping
-                // it would give Final un-grouped rows, producing wrong results.
-                && final_agg.group_expr().is_empty()
-            {
-                // Walk through CoalescePartitionsExec/RepartitionExec to find the Partial
-                if let Some(partial_input) = find_partial_agg_input(final_agg.input()) {
-                    let partial_input = Arc::clone(partial_input);
-                    // Coalesce partitions before Final so it reads from a single partition
-                    let coalesced = Arc::new(datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec::new(partial_input));
-                    let new_final = plan.with_new_children(vec![coalesced])?;
-                    return self.optimize(new_final, _config);
-                }
-            }
-        }
-        let new_children: datafusion_common::Result<Vec<_>> = plan
-            .children()
-            .into_iter()
-            .map(|c| self.optimize(Arc::clone(c), _config))
-            .collect();
-        plan.with_new_children(new_children?)
-    }
-
-    fn name(&self) -> &str { "StripPartialAggregateRule" }
-    fn schema_check(&self) -> bool { false }
-}
-
-/// Walks through single-child passthrough nodes (CoalescePartitionsExec, RepartitionExec)
-/// to find the input of a Partial AggregateExec. Returns the Partial's input if found.
-fn find_partial_agg_input(
-    plan: &Arc<dyn datafusion::physical_plan::ExecutionPlan>,
-) -> Option<&Arc<dyn datafusion::physical_plan::ExecutionPlan>> {
-    use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
-    if let Some(agg) = plan.as_any().downcast_ref::<AggregateExec>() {
-        if matches!(agg.mode(), AggregateMode::Partial) {
-            return Some(agg.input());
-        }
-    }
-    // Walk through single-child passthrough nodes
-    if plan.children().len() == 1 {
-        return find_partial_agg_input(plan.children()[0]);
-    }
-    None
 }
 
 #[cfg(test)]
