@@ -26,6 +26,7 @@ import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.schema.ColumnStrategy;
 import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.sql.SqlKind;
+import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -34,8 +35,11 @@ import org.opensearch.analytics.spi.DelegatedPredicateFunction;
 import org.opensearch.analytics.spi.FragmentConvertor;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 import io.substrait.expression.AggregateFunctionInvocation;
 import io.substrait.expression.Expression;
@@ -245,10 +249,10 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         // Only set INITIAL_TO_INTERMEDIATE for functions that have meaningful intermediate state.
         // MIN and MAX don't benefit from partial mode in DataFusion's Substrait consumer —
         // setting INITIAL_TO_INTERMEDIATE on them causes type errors.
-        java.util.Set<String> partialFunctions = java.util.Set.of("sum", "count", "approx_count_distinct");
+        Set<String> partialFunctions = Set.of("sum", "count", "approx_count_distinct");
         List<Aggregate.Measure> newMeasures = new ArrayList<>(agg.getMeasures().size());
         for (Aggregate.Measure m : agg.getMeasures()) {
-            String funcName = m.getFunction().declaration().name().toLowerCase(java.util.Locale.ROOT);
+            String funcName = m.getFunction().declaration().name().toLowerCase(Locale.ROOT);
             if (partialFunctions.contains(funcName)) {
                 AggregateFunctionInvocation rephased = AggregateFunctionInvocation.builder().from(m.getFunction()).aggregationPhase(phase).build();
                 newMeasures.add(Aggregate.Measure.builder().from(m).function(rephased).build());
@@ -282,11 +286,11 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
             return node;
         }
         // Find approx_count_distinct positions in the aggregate call list
-        java.util.Set<Integer> approxPositions = new java.util.HashSet<>();
+        Set<Integer> approxPositions = new HashSet<>();
         int groupCount = agg.getGroupSet().cardinality();
         for (int i = 0; i < agg.getAggCallList().size(); i++) {
-            org.apache.calcite.rel.core.AggregateCall call = agg.getAggCallList().get(i);
-            if (call.getAggregation().getKind() == org.apache.calcite.sql.SqlKind.COUNT && call.isApproximate()) {
+            AggregateCall call = agg.getAggCallList().get(i);
+            if (call.getAggregation().getKind() == SqlKind.COUNT && call.isApproximate()) {
                 approxPositions.add(groupCount + i);
             }
         }
@@ -299,12 +303,12 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         RelDataTypeFactory typeFactory = scan.getCluster().getTypeFactory();
         RelDataType origType = scan.getRowType();
         List<RelDataTypeField> fields = origType.getFieldList();
-        List<String> names = new java.util.ArrayList<>();
-        List<RelDataType> types = new java.util.ArrayList<>();
+        List<String> names = new ArrayList<>();
+        List<RelDataType> types = new ArrayList<>();
         for (int i = 0; i < fields.size(); i++) {
             names.add(fields.get(i).getName());
             if (approxPositions.contains(i)) {
-                types.add(typeFactory.createSqlType(org.apache.calcite.sql.type.SqlTypeName.VARBINARY, Integer.MAX_VALUE));
+                types.add(typeFactory.createSqlType(SqlTypeName.VARBINARY, Integer.MAX_VALUE));
             } else {
                 types.add(fields.get(i).getType());
             }

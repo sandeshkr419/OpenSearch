@@ -8,7 +8,11 @@
 
 package org.opensearch.analytics.exec.stage;
 
+import org.apache.arrow.vector.types.pojo.ArrowType;
+import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.types.pojo.Schema;
+import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Aggregate;
 import org.apache.calcite.rel.core.AggregateCall;
@@ -20,6 +24,7 @@ import org.opensearch.analytics.spi.ExchangeSink;
 import org.opensearch.analytics.spi.ExchangeSinkContext;
 import org.opensearch.analytics.spi.ExchangeSinkProvider;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -90,22 +95,22 @@ final class LocalStageScheduler implements StageScheduler {
         }
 
         // Build the Arrow schema, overriding types for functions with intermediate state.
-        List<org.apache.arrow.vector.types.pojo.Field> fields = new java.util.ArrayList<>();
+        List<Field> fields = new ArrayList<>();
         int groupCount = agg.getGroupSet().cardinality();
         // Group-by columns use the Calcite type
         for (int i = 0; i < groupCount; i++) {
-            org.apache.calcite.rel.type.RelDataTypeField f = childFragment.getRowType().getFieldList().get(i);
+            RelDataTypeField f = childFragment.getRowType().getFieldList().get(i);
             fields.add(ArrowSchemaFromCalcite.fieldFromCalcite(f));
         }
         // Aggregate output columns: check for intermediate-state functions
         for (int i = 0; i < agg.getAggCallList().size(); i++) {
             AggregateCall call = agg.getAggCallList().get(i);
-            org.apache.calcite.rel.type.RelDataTypeField f = childFragment.getRowType().getFieldList().get(groupCount + i);
+            RelDataTypeField f = childFragment.getRowType().getFieldList().get(groupCount + i);
             if (call.getAggregation().getKind() == SqlKind.COUNT && call.isApproximate()) {
                 // approx_count_distinct partial emits binary (HLL sketch)
-                fields.add(new org.apache.arrow.vector.types.pojo.Field(
+                fields.add(new Field(
                     f.getName(),
-                    new org.apache.arrow.vector.types.pojo.FieldType(true, org.apache.arrow.vector.types.pojo.ArrowType.Binary.INSTANCE, null),
+                    new FieldType(true, ArrowType.Binary.INSTANCE, null),
                     null
                 ));
             } else {
