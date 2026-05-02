@@ -22,7 +22,9 @@ import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Filter;
 import org.apache.calcite.rel.core.Project;
 import org.apache.calcite.rel.metadata.RelMetadataQuery;
+import org.apache.calcite.rel.rules.AggregateReduceFunctionsRule;
 import org.apache.calcite.rel.rules.ReduceExpressionsRule;
+import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.tools.RelBuilder;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -82,7 +84,11 @@ public class PlannerImpl {
         hepBuilder.addRuleCollection(
             List.of(
                 new ReduceExpressionsRule.FilterReduceExpressionsRule(Filter.class, RelBuilder.proto(Contexts.empty())),
-                new ReduceExpressionsRule.ProjectReduceExpressionsRule(Project.class, RelBuilder.proto(Contexts.empty()))
+                new ReduceExpressionsRule.ProjectReduceExpressionsRule(Project.class, RelBuilder.proto(Contexts.empty())),
+                // Rewrite AVG → SUM/COUNT + Project before marking so backends receive
+                // only primitive aggregates (SUM, COUNT) that they natively support.
+                new AggregateReduceFunctionsRule(org.apache.calcite.rel.core.Aggregate.class,
+                    RelBuilder.proto(Contexts.empty()), java.util.EnumSet.of(SqlKind.AVG))
             )
         );
 

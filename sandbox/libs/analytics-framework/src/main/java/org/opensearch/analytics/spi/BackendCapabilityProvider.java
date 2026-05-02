@@ -10,6 +10,8 @@ package org.opensearch.analytics.spi;
 
 import java.util.Map;
 import java.util.Set;
+import java.util.function.UnaryOperator;
+import org.apache.calcite.rel.core.AggregateCall;
 
 /**
  * Declares the query planning capabilities of a backend plugin.
@@ -79,6 +81,16 @@ public interface BackendCapabilityProvider {
      * serializer during fragment conversion when a predicate is delegated to this backend.
      */
     default Map<ScalarFunction, DelegatedPredicateSerializer> delegatedPredicateSerializers() {
+        return Map.of();
+    }
+
+    /**
+     * Per-function adapters for rewriting aggregate calls before fragment conversion.
+     * Keyed by {@link AggregateFunction}. Applied to {@code OpenSearchAggregate} nodes
+     * during {@code BackendPlanAdapter} adaptation.
+     * Empty map means no adaptation needed.
+     */
+    default Map<AggregateFunction, UnaryOperator<AggregateCall>> aggregateCallAdapters() {
         return Map.of();
     }
 }

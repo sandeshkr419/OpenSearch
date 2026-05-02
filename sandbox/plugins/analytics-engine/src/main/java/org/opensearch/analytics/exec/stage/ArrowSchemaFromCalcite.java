@@ -26,6 +26,11 @@ import java.util.List;
  * child stage's resolved fragment row type.
  *
  * <p>All fields are nullable for MVP.
+ *
+ * <p>TODO: tie the {@link SqlTypeName} → {@link ArrowType} mapping to
+ * {@link org.opensearch.analytics.spi.FieldType} so the conversion is driven by
+ * the same type enum used throughout the planner, rather than a parallel switch
+ * on raw Calcite SQL type names.
  */
 final class ArrowSchemaFromCalcite {
 

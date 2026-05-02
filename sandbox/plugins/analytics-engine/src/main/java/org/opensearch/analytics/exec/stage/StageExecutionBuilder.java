@@ -13,6 +13,7 @@ import org.apache.logging.log4j.Logger;
 import org.opensearch.analytics.exec.AnalyticsSearchTransportService;
 import org.opensearch.analytics.exec.QueryContext;
 import org.opensearch.analytics.exec.RowProducingSink;
+import org.opensearch.analytics.planner.CapabilityRegistry;
 import org.opensearch.analytics.planner.dag.Stage;
 import org.opensearch.analytics.planner.dag.StageExecutionType;
 import org.opensearch.analytics.spi.DataConsumer;
@@ -52,10 +53,10 @@ public class StageExecutionBuilder {
      * of {@link StageExecutionType}.
      */
     @Inject
-    public StageExecutionBuilder(ClusterService clusterService, AnalyticsSearchTransportService dispatcher) {
+    public StageExecutionBuilder(ClusterService clusterService, AnalyticsSearchTransportService dispatcher, CapabilityRegistry capabilityRegistry) {
         this.schedulers = new HashMap<>();
         registerScheduler(StageExecutionType.SHARD_FRAGMENT, new ShardFragmentStageScheduler(clusterService, dispatcher));
-        registerScheduler(StageExecutionType.COORDINATOR_REDUCE, new LocalStageScheduler());
+        registerScheduler(StageExecutionType.COORDINATOR_REDUCE, new LocalStageScheduler(capabilityRegistry));
         registerScheduler(StageExecutionType.LOCAL_PASSTHROUGH, (stage, sink, config) -> new PassThroughStageExecution(stage, sink));
     }
 

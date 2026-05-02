@@ -8,6 +8,7 @@
 
 package org.opensearch.be.datafusion;
 
+import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.calcite.rel.RelCollations;
 import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.rex.RexBuilder;
@@ -48,5 +49,12 @@ public class HllDecomposition implements AggregateDecomposition {
     public RexNode finalExpression(RexBuilder rexBuilder, List<RexNode> partialRefs) {
         // Identity: the FINAL AggregateExec produces the merged count directly
         return partialRefs.get(0);
+    }
+
+    @Override
+    public List<ArrowType> intermediateArrowTypes() {
+        // approx_count_distinct declares BIGINT in Calcite but DataFusion emits
+        // binary HLL sketch bytes in partial mode
+        return List.of(ArrowType.Binary.INSTANCE);
     }
 }

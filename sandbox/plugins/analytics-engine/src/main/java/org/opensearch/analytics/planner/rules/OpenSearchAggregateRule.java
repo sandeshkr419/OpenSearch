@@ -77,15 +77,6 @@ public class OpenSearchAggregateRule extends RelOptRule {
         // Annotate each AggregateCall with per-call viable backends
         List<AggregateCall> annotatedCalls = new ArrayList<>();
         for (AggregateCall aggCall : aggregate.getAggCallList()) {
-            // Rewrite COUNT(DISTINCT x) → APPROX_COUNT_DISTINCT(x) for distributed execution.
-            if (aggCall.getAggregation().getKind() == org.apache.calcite.sql.SqlKind.COUNT
-                    && aggCall.isDistinct() && !aggCall.isApproximate()) {
-                aggCall = AggregateCall.create(
-                    org.apache.calcite.sql.fun.SqlStdOperatorTable.APPROX_COUNT_DISTINCT,
-                    true, true, aggCall.ignoreNulls(), aggCall.rexList, aggCall.getArgList(),
-                    aggCall.filterArg, aggCall.distinctKeys, aggCall.collation, aggCall.type, aggCall.name
-                );
-            }
             AggregateCall fixedCall = fixAggCallType(aggCall, aggregate);
             List<String> callViable = resolveViableBackendsForCall(fixedCall, childFieldStorage);
             if (callViable.isEmpty()) {

@@ -11,6 +11,7 @@ package org.opensearch.analytics.planner.dag;
 import org.apache.calcite.plan.RelOptCluster;
 import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.sql.SqlFunction;
@@ -18,10 +19,12 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.analytics.planner.CapabilityRegistry;
 import org.opensearch.analytics.planner.RelNodeUtils;
+import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
 import org.opensearch.analytics.planner.rel.OpenSearchFilter;
 import org.opensearch.analytics.planner.rel.OpenSearchProject;
 import org.opensearch.analytics.planner.rel.OpenSearchRelNode;
 import org.opensearch.analytics.planner.rel.OperatorAnnotation;
+import org.opensearch.analytics.spi.AggregateFunction;
 import org.opensearch.analytics.spi.FieldStorageInfo;
 import org.opensearch.analytics.spi.ScalarFunction;
 import org.opensearch.analytics.spi.ScalarFunctionAdapter;
@@ -29,6 +32,7 @@ import org.opensearch.analytics.spi.ScalarFunctionAdapter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.UnaryOperator;
 
 /**
  * Walks a resolved plan and applies per-function {@link ScalarFunctionAdapter}s
@@ -60,14 +64,17 @@ public class BackendPlanAdapter {
         }
         List<StagePlan> adapted = new ArrayList<>(stage.getPlanAlternatives().size());
         for (StagePlan plan : stage.getPlanAlternatives()) {
-            Map<ScalarFunction, ScalarFunctionAdapter> adapters = registry.getBackend(plan.backendId())
+            Map<ScalarFunction, ScalarFunctionAdapter> scalarAdapters = registry.getBackend(plan.backendId())
                 .getCapabilityProvider()
                 .scalarFunctionAdapters();
-            if (adapters.isEmpty()) {
+            Map<AggregateFunction, UnaryOperator<AggregateCall>> aggAdapters = registry.getBackend(plan.backendId())
+                .getCapabilityProvider()
+                .aggregateCallAdapters();
+            if (scalarAdapters.isEmpty() && aggAdapters.isEmpty()) {
                 adapted.add(plan);
             } else {
                 LOGGER.debug("Before adaptation [{}]:\n{}", plan.backendId(), RelOptUtil.toString(plan.resolvedFragment()));
-                RelNode adaptedFragment = adaptNode(plan.resolvedFragment(), adapters);
+                RelNode adaptedFragment = adaptNode(plan.resolvedFragment(), scalarAdapters, aggAdapters);
                 LOGGER.debug("After adaptation [{}]:\n{}", plan.backendId(), RelOptUtil.toString(adaptedFragment));
                 adapted.add(new StagePlan(adaptedFragment, plan.backendId()));
             }
@@ -75,23 +82,56 @@ public class BackendPlanAdapter {
         stage.setPlanAlternatives(adapted);
     }
 
-    private static RelNode adaptNode(RelNode node, Map<ScalarFunction, ScalarFunctionAdapter> adapters) {
+    private static RelNode adaptNode(
+        RelNode node,
+        Map<ScalarFunction, ScalarFunctionAdapter> scalarAdapters,
+        Map<AggregateFunction, UnaryOperator<AggregateCall>> aggAdapters
+    ) {
         List<RelNode> adaptedChildren = new ArrayList<>(node.getInputs().size());
         boolean childrenChanged = false;
         for (RelNode child : node.getInputs()) {
-            RelNode adaptedChild = adaptNode(child, adapters);
+            RelNode adaptedChild = adaptNode(child, scalarAdapters, aggAdapters);
             adaptedChildren.add(adaptedChild);
             if (adaptedChild != child) childrenChanged = true;
         }
 
+        if (node instanceof OpenSearchAggregate agg && !aggAdapters.isEmpty()) {
+            return adaptAggregate(agg, aggAdapters, adaptedChildren, childrenChanged);
+        }
         if (node instanceof OpenSearchFilter filter) {
-            return adaptFilter(filter, adapters, adaptedChildren, childrenChanged);
+            return adaptFilter(filter, scalarAdapters, adaptedChildren, childrenChanged);
         }
         if (node instanceof OpenSearchProject project) {
-            return adaptProject(project, adapters, adaptedChildren, childrenChanged);
+            return adaptProject(project, scalarAdapters, adaptedChildren, childrenChanged);
         }
 
         return childrenChanged ? node.copy(node.getTraitSet(), adaptedChildren) : node;
+    }
+
+    private static RelNode adaptAggregate(
+        OpenSearchAggregate agg,
+        Map<AggregateFunction, UnaryOperator<AggregateCall>> aggAdapters,
+        List<RelNode> adaptedChildren,
+        boolean childrenChanged
+    ) {
+        List<AggregateCall> adaptedCalls = new ArrayList<>(agg.getAggCallList().size());
+        boolean callsChanged = false;
+        for (AggregateCall call : agg.getAggCallList()) {
+            AggregateFunction func = AggregateFunction.fromSqlKind(call.getAggregation().getKind());
+            UnaryOperator<AggregateCall> adapter = func != null ? aggAdapters.get(func) : null;
+            AggregateCall adapted = adapter != null ? adapter.apply(call) : call;
+            adaptedCalls.add(adapted);
+            if (adapted != call) callsChanged = true;
+        }
+        if (callsChanged || childrenChanged) {
+            return new OpenSearchAggregate(
+                agg.getCluster(), agg.getTraitSet(),
+                childrenChanged ? adaptedChildren.getFirst() : agg.getInput(),
+                agg.getGroupSet(), agg.getGroupSets(), adaptedCalls,
+                agg.getMode(), agg.getViableBackends()
+            );
+        }
+        return agg;
     }
 
     private static RelNode adaptFilter(

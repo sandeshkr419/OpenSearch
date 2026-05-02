@@ -18,8 +18,11 @@ import org.apache.calcite.rel.core.Aggregate;
 import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.sql.SqlKind;
 import org.opensearch.analytics.exec.QueryContext;
+import org.opensearch.analytics.planner.CapabilityRegistry;
 import org.opensearch.analytics.planner.dag.Stage;
 import org.opensearch.analytics.planner.dag.StageExecutionType;
+import org.opensearch.analytics.spi.AggregateDecomposition;
+import org.opensearch.analytics.spi.AggregateFunction;
 import org.opensearch.analytics.spi.ExchangeSink;
 import org.opensearch.analytics.spi.ExchangeSinkContext;
 import org.opensearch.analytics.spi.ExchangeSinkProvider;
@@ -42,6 +45,12 @@ import java.util.List;
  */
 final class LocalStageScheduler implements StageScheduler {
 
+    private final CapabilityRegistry capabilityRegistry;
+
+    LocalStageScheduler(CapabilityRegistry capabilityRegistry) {
+        this.capabilityRegistry = capabilityRegistry;
+    }
+
     @Override
     public StageExecution createExecution(Stage stage, ExchangeSink sink, QueryContext config) {
         ExchangeSinkProvider provider = stage.getExchangeSinkProvider();
@@ -50,7 +59,7 @@ final class LocalStageScheduler implements StageScheduler {
             stage.getStageId(),
             chosenBytes(stage),
             config.bufferAllocator(),
-            deriveInputSchema(stage),
+            deriveInputSchema(stage, capabilityRegistry),
             sink
         );
         ExchangeSink backendSink;
@@ -76,7 +85,7 @@ final class LocalStageScheduler implements StageScheduler {
      * fragment rowtype. Multi-child support (joins, set ops with heterogeneous
      * inputs) is deferred.
      */
-    private static Schema deriveInputSchema(Stage stage) {
+    private static Schema deriveInputSchema(Stage stage, CapabilityRegistry capabilityRegistry) {
         List<Stage> children = stage.getChildStages();
         assert children.size() == 1 : "COORDINATOR_REDUCE stage "
             + stage.getStageId()
@@ -87,37 +96,54 @@ final class LocalStageScheduler implements StageScheduler {
             ? child.getFragment()
             : child.getPlanAlternatives().getFirst().resolvedFragment();
 
-        // Find the aggregate in the child fragment to check for functions with
-        // non-trivial intermediate state (e.g. approx_count_distinct emits binary).
         Aggregate agg = findAggregate(childFragment);
         if (agg == null) {
             return ArrowSchemaFromCalcite.arrowSchemaFromRowType(childFragment.getRowType());
         }
 
-        // Build the Arrow schema, overriding types for functions with intermediate state.
+        // Determine the backend for this child stage to look up decompositions
+        String backendId = child.getPlanAlternatives().isEmpty()
+            ? null
+            : child.getPlanAlternatives().getFirst().backendId();
+
         List<Field> fields = new ArrayList<>();
         int groupCount = agg.getGroupSet().cardinality();
-        // Group-by columns use the Calcite type
         for (int i = 0; i < groupCount; i++) {
             RelDataTypeField f = childFragment.getRowType().getFieldList().get(i);
             fields.add(ArrowSchemaFromCalcite.fieldFromCalcite(f));
         }
-        // Aggregate output columns: check for intermediate-state functions
         for (int i = 0; i < agg.getAggCallList().size(); i++) {
             AggregateCall call = agg.getAggCallList().get(i);
             RelDataTypeField f = childFragment.getRowType().getFieldList().get(groupCount + i);
-            if (call.getAggregation().getKind() == SqlKind.COUNT && call.isApproximate()) {
-                // approx_count_distinct partial emits binary (HLL sketch)
-                fields.add(new Field(
-                    f.getName(),
-                    new FieldType(true, ArrowType.Binary.INSTANCE, null),
-                    null
-                ));
+            ArrowType overrideType = resolveIntermediateArrowType(call, backendId, capabilityRegistry);
+            if (overrideType != null) {
+                fields.add(new Field(f.getName(), new FieldType(true, overrideType, null), null));
             } else {
                 fields.add(ArrowSchemaFromCalcite.fieldFromCalcite(f));
             }
         }
         return new Schema(fields);
+    }
+
+    /**
+     * Returns the intermediate Arrow type for a partial aggregate call if the
+     * backend's decomposition declares one, or {@code null} to use the Calcite type.
+     */
+    private static ArrowType resolveIntermediateArrowType(
+        AggregateCall call, String backendId, CapabilityRegistry registry
+    ) {
+        if (backendId == null || registry == null) return null;
+        AggregateFunction func = AggregateFunction.fromSqlKind(call.getAggregation().getKind());
+        // APPROX_COUNT_DISTINCT has SqlKind.COUNT — check by name when approximate
+        if (func == AggregateFunction.COUNT && call.isApproximate()) {
+            try { func = AggregateFunction.fromNameOrError(call.getAggregation().getName()); }
+            catch (IllegalArgumentException ignored) {}
+        }
+        if (func == null) return null;
+        AggregateDecomposition decomp = registry.getDecomposition(backendId, func);
+        if (decomp == null) return null;
+        List<org.apache.arrow.vector.types.pojo.ArrowType> types = decomp.intermediateArrowTypes();
+        return types.isEmpty() ? null : types.get(0);
     }
 
     private static Aggregate findAggregate(RelNode node) {

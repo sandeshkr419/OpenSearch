@@ -68,7 +68,6 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
         AggregateFunction.MIN,
         AggregateFunction.MAX,
         AggregateFunction.COUNT,
-        AggregateFunction.AVG,
         AggregateFunction.APPROX_COUNT_DISTINCT
     );
 
@@ -127,8 +126,6 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
                     for (FieldType type : SUPPORTED_FIELD_TYPES) {
                         if (func == AggregateFunction.APPROX_COUNT_DISTINCT) {
                             caps.add(new AggregateCapability(func, Set.of(type), formats, HllDecomposition.INSTANCE));
-                        } else if (func == AggregateFunction.AVG) {
-                            caps.add(new AggregateCapability(func, Set.of(type), formats, AvgDecomposition.INSTANCE));
                         } else {
                             caps.add(AggregateCapability.simple(func, Set.of(type), formats));
                         }
@@ -147,6 +144,23 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
                     }
                 }
                 return Set.copyOf(caps);
+            }
+
+            @Override
+            public java.util.Map<org.opensearch.analytics.spi.AggregateFunction, java.util.function.UnaryOperator<org.apache.calcite.rel.core.AggregateCall>> aggregateCallAdapters() {
+                // Rewrite COUNT(DISTINCT x) → APPROX_COUNT_DISTINCT(x): DataFusion uses HLL
+                // for approximate distinct counting in distributed execution.
+                return java.util.Map.of(
+                    org.opensearch.analytics.spi.AggregateFunction.COUNT,
+                    call -> {
+                        if (!call.isDistinct() || call.isApproximate()) return call;
+                        return org.apache.calcite.rel.core.AggregateCall.create(
+                            org.apache.calcite.sql.fun.SqlStdOperatorTable.APPROX_COUNT_DISTINCT,
+                            true, true, call.ignoreNulls(), call.rexList, call.getArgList(),
+                            call.filterArg, call.distinctKeys, call.collation, call.type, call.name
+                        );
+                    }
+                );
             }
         };
     }
