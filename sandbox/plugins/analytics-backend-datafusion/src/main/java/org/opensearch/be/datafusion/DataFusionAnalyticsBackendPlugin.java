@@ -8,6 +8,9 @@
 
 package org.opensearch.be.datafusion;
 
+import org.apache.arrow.vector.types.pojo.ArrowType;
+import org.apache.calcite.rel.core.AggregateCall;
+import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.opensearch.analytics.spi.AggregateCapability;
 import org.opensearch.analytics.spi.AggregateFunction;
 import org.opensearch.analytics.spi.AnalyticsSearchBackendPlugin;
@@ -24,7 +27,9 @@ import org.opensearch.analytics.spi.SearchExecEngineProvider;
 import org.opensearch.index.engine.dataformat.DataFormatRegistry;
 
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
+import java.util.function.UnaryOperator;
 
 /**
  * SPI extension discovered by analytics-engine via {@code META-INF/services}.
@@ -126,7 +131,7 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
                     for (FieldType type : SUPPORTED_FIELD_TYPES) {
                         if (func == AggregateFunction.APPROX_COUNT_DISTINCT) {
                             caps.add(AggregateCapability.approximate(func, Set.of(type), formats,
-                                org.apache.arrow.vector.types.pojo.ArrowType.Binary.INSTANCE));
+                                ArrowType.Binary.INSTANCE));
                         } else {
                             caps.add(AggregateCapability.simple(func, Set.of(type), formats));
                         }
@@ -148,15 +153,15 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
             }
 
             @Override
-            public java.util.Map<org.opensearch.analytics.spi.AggregateFunction, java.util.function.UnaryOperator<org.apache.calcite.rel.core.AggregateCall>> aggregateCallAdapters() {
+            public Map<AggregateFunction, UnaryOperator<AggregateCall>> aggregateCallAdapters() {
                 // Rewrite COUNT(DISTINCT x) → APPROX_COUNT_DISTINCT(x): DataFusion uses HLL
                 // for approximate distinct counting in distributed execution.
-                return java.util.Map.of(
-                    org.opensearch.analytics.spi.AggregateFunction.COUNT,
+                return Map.of(
+                    AggregateFunction.COUNT,
                     call -> {
                         if (!call.isDistinct() || call.isApproximate()) return call;
-                        return org.apache.calcite.rel.core.AggregateCall.create(
-                            org.apache.calcite.sql.fun.SqlStdOperatorTable.APPROX_COUNT_DISTINCT,
+                        return AggregateCall.create(
+                            SqlStdOperatorTable.APPROX_COUNT_DISTINCT,
                             true, true, call.ignoreNulls(), call.rexList, call.getArgList(),
                             call.filterArg, call.distinctKeys, call.collation, call.type, call.name
                         );

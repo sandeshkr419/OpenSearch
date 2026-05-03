@@ -8,7 +8,9 @@
 
 package org.opensearch.analytics.planner;
 
+import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.opensearch.analytics.spi.AggregateCapability;
+import org.opensearch.analytics.spi.AggregateDecomposition;
 import org.opensearch.analytics.spi.AggregateFunction;
 import org.opensearch.analytics.spi.AnalyticsSearchBackendPlugin;
 import org.opensearch.common.Nullable;
@@ -75,9 +77,9 @@ public class CapabilityRegistry {
     private final Map<FullTextParamKey, Set<String>> fullTextParamIndex = new HashMap<>();
 
     // Decomposition index: (backendName, AggregateFunction) → AggregateDecomposition
-    private final Map<DecompositionKey, org.opensearch.analytics.spi.AggregateDecomposition> decompositionIndex = new HashMap<>();
+    private final Map<DecompositionKey, AggregateDecomposition> decompositionIndex = new HashMap<>();
     // Intermediate Arrow type index: (backendName, AggregateFunction) → ArrowType
-    private final Map<DecompositionKey, org.apache.arrow.vector.types.pojo.ArrowType> intermediateArrowTypeIndex = new HashMap<>();
+    private final Map<DecompositionKey, ArrowType> intermediateArrowTypeIndex = new HashMap<>();
 
     private final Function<IndexMetadata, FieldStorageResolver> fieldStorageFactory;
 
@@ -304,13 +306,13 @@ public class CapabilityRegistry {
 
     /** Returns the decomposition for the given backend+function, or null if none registered. */
     @Nullable
-    public org.opensearch.analytics.spi.AggregateDecomposition getDecomposition(String backendName, AggregateFunction function) {
+    public AggregateDecomposition getDecomposition(String backendName, AggregateFunction function) {
         return decompositionIndex.get(new DecompositionKey(backendName, function));
     }
 
     /** Returns the intermediate Arrow type for the given backend+function, or null if none registered. */
     @Nullable
-    public org.apache.arrow.vector.types.pojo.ArrowType getIntermediateArrowType(String backendName, AggregateFunction function) {
+    public ArrowType getIntermediateArrowType(String backendName, AggregateFunction function) {
         return intermediateArrowTypeIndex.get(new DecompositionKey(backendName, function));
     }
 

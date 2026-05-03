@@ -8,6 +8,7 @@
 
 package org.opensearch.analytics.spi;
 
+import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.opensearch.common.Nullable;
 
 import java.util.Set;
@@ -42,7 +43,7 @@ import java.util.Set;
  */
 public record AggregateCapability(AggregateFunction function, Set<FieldType> fieldTypes, Set<String> formats,
     @Nullable AggregateDecomposition decomposition,
-    @Nullable org.apache.arrow.vector.types.pojo.ArrowType intermediateArrowType) {
+    @Nullable ArrowType intermediateArrowType) {
 
     /** Convenience constructor with no custom decomposition and no intermediate type override. */
     public AggregateCapability(AggregateFunction function, Set<FieldType> fieldTypes, Set<String> formats) {
@@ -77,7 +78,7 @@ public record AggregateCapability(AggregateFunction function, Set<FieldType> fie
      * the correct streaming table schema.
      */
     public static AggregateCapability approximate(AggregateFunction function, Set<FieldType> fieldTypes,
-        Set<String> formats, org.apache.arrow.vector.types.pojo.ArrowType intermediateArrowType) {
+        Set<String> formats, ArrowType intermediateArrowType) {
         assert function.getType() == AggregateFunction.Type.APPROXIMATE;
         return new AggregateCapability(function, fieldTypes, formats, null, intermediateArrowType);
     }
