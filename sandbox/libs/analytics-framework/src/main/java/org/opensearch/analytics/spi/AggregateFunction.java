@@ -76,6 +76,22 @@ public enum AggregateFunction {
         return null;
     }
 
+    /**
+     * Resolves the {@link AggregateFunction} for a Calcite {@link org.apache.calcite.rel.core.AggregateCall},
+     * handling cases where the SqlKind alone is ambiguous (e.g. COUNT vs APPROX_COUNT_DISTINCT).
+     */
+    public static AggregateFunction fromAggregateCall(org.apache.calcite.rel.core.AggregateCall call) {
+        if (call.getAggregation().getKind() == SqlKind.COUNT && call.isApproximate()) {
+            return APPROX_COUNT_DISTINCT;
+        }
+        AggregateFunction func = fromSqlKind(call.getAggregation().getKind());
+        if (func == null) {
+            try { func = fromNameOrError(call.getAggregation().getName()); }
+            catch (IllegalStateException ignored) {}
+        }
+        return func;
+    }
+
     /** Maps an aggregate function name to an AggregateFunction. Throws if not recognized. */
     public static AggregateFunction fromNameOrError(String name) {
         try {

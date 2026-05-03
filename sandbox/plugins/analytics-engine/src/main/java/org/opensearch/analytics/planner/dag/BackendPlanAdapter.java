@@ -117,7 +117,7 @@ public class BackendPlanAdapter {
         List<AggregateCall> adaptedCalls = new ArrayList<>(agg.getAggCallList().size());
         boolean callsChanged = false;
         for (AggregateCall call : agg.getAggCallList()) {
-            AggregateFunction func = AggregateFunction.fromSqlKind(call.getAggregation().getKind());
+            AggregateFunction func = AggregateFunction.fromAggregateCall(call);
             UnaryOperator<AggregateCall> adapter = func != null ? aggAdapters.get(func) : null;
             AggregateCall adapted = adapter != null ? adapter.apply(call) : call;
             adaptedCalls.add(adapted);

@@ -14,7 +14,6 @@ import org.apache.calcite.plan.RelTraitSet;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.rex.RexBuilder;
-import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexNode;
 import org.opensearch.analytics.planner.PlannerContext;
 import org.opensearch.analytics.planner.rel.AggregateMode;
@@ -78,7 +77,9 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
         RelNode child = call.rel(1);
         RexBuilder rexBuilder = aggregate.getCluster().getRexBuilder();
 
-        // Determine the chosen backend (first viable — all support the same decompositions)
+        // All viable backends for a resolved plan alternative share the same decompositions
+        // (decomposition is registered per-backend, and plan forking ensures a single backend
+        // is chosen). Using getFirst() is safe here.
         String backend = aggregate.getViableBackends().getFirst();
 
         // Build PARTIAL aggCalls, expanding any decomposed functions.
@@ -88,8 +89,7 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
         List<Integer> partialStartIndex = new ArrayList<>(); // start index in partialCalls for each original call
 
         for (AggregateCall origCall : aggregate.getAggCallList()) {
-            AggregateFunction func = AggregateFunction.fromSqlKind(origCall.getAggregation().getKind());
-            if (func == null) func = AggregateFunction.fromNameOrError(origCall.getAggregation().getName());
+            AggregateFunction func = AggregateFunction.fromAggregateCall(origCall);
             AggregateDecomposition decomp = context.getCapabilityRegistry().getDecomposition(backend, func);
             partialStartIndex.add(partialCalls.size());
             if (decomp != null) {
@@ -115,30 +115,7 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
 
         int groupCount = aggregate.getGroupSet().cardinality();
 
-        // Check if any call has a decomposition — if so, we need a Project on top of FINAL
-        boolean hasDecomposition = decompositions.stream().anyMatch(d -> d != null);
-
-        if (!hasDecomposition) {
-            // No decomposition: standard remap (same as before)
-            List<AggregateCall> finalCalls = new ArrayList<>();
-            for (int i = 0; i < aggregate.getAggCallList().size(); i++) {
-                AggregateCall origCall = aggregate.getAggCallList().get(i);
-                finalCalls.add(origCall.adaptTo(gathered, List.of(groupCount + i), origCall.filterArg, groupCount, aggregate.getGroupCount()));
-            }
-            OpenSearchAggregate finalAggregate = new OpenSearchAggregate(
-                aggregate.getCluster(), singletonTraits, gathered,
-                aggregate.getGroupSet(), aggregate.getGroupSets(),
-                finalCalls, AggregateMode.FINAL, aggregate.getViableBackends()
-            );
-            call.transformTo(finalAggregate);
-            return;
-        }
-
-        // With decomposition: FINAL aggregate has the partial calls (SUM+COUNT etc.),
-        // then a Project applies finalExpression() to produce the original output columns.
-        //
         // FINAL aggCalls: remap each partial call to reference its column in gathered output
-        int partialOutputCount = groupCount + partialCalls.size();
         List<AggregateCall> finalAggCalls = new ArrayList<>();
         for (int pi = 0; pi < partialCalls.size(); pi++) {
             AggregateCall pc = partialCalls.get(pi);
@@ -150,22 +127,25 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
             finalAggCalls, AggregateMode.FINAL, aggregate.getViableBackends()
         );
 
-        // Project: group-by columns pass through, then finalExpression() for each original call
+        // If no decompositions, the final aggregate is the result directly
+        if (decompositions.stream().allMatch(d -> d == null)) {
+            call.transformTo(finalAggregate);
+            return;
+        }
+
+        // With decomposition: wrap FINAL in a Project applying finalExpression() per original call
         List<RexNode> projectExprs = new ArrayList<>();
         List<String> projectNames = new ArrayList<>();
-        // Group-by columns
         for (int i = 0; i < groupCount; i++) {
             projectExprs.add(rexBuilder.makeInputRef(finalAggregate, i));
             projectNames.add(finalAggregate.getRowType().getFieldList().get(i).getName());
         }
-        // Aggregate output columns
         for (int i = 0; i < aggregate.getAggCallList().size(); i++) {
             AggregateCall origCall = aggregate.getAggCallList().get(i);
             AggregateDecomposition decomp = decompositions.get(i);
             int startIdx = partialStartIndex.get(i);
             int endIdx = (i + 1 < partialStartIndex.size()) ? partialStartIndex.get(i + 1) : partialCalls.size();
             if (decomp != null) {
-                // Build refs to the partial output columns in the FINAL aggregate's output
                 List<RexNode> partialRefs = new ArrayList<>();
                 for (int pi = startIdx; pi < endIdx; pi++) {
                     partialRefs.add(rexBuilder.makeInputRef(finalAggregate, groupCount + pi));
@@ -176,18 +156,11 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
             }
             projectNames.add(origCall.name != null ? origCall.name : "expr$" + i);
         }
-
-        RelNode project = new OpenSearchProject(
-            aggregate.getCluster(),
-            singletonTraits,
-            finalAggregate,
-            projectExprs,
+        call.transformTo(new OpenSearchProject(
+            aggregate.getCluster(), singletonTraits, finalAggregate, projectExprs,
             aggregate.getCluster().getTypeFactory().createStructType(
-                projectExprs.stream().map(RexNode::getType).toList(), projectNames
-            ),
+                projectExprs.stream().map(RexNode::getType).toList(), projectNames),
             aggregate.getViableBackends()
-        );
-
-        call.transformTo(project);
+        ));
     }
 }

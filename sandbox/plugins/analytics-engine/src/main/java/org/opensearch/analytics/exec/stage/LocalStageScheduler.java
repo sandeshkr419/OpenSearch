@@ -16,7 +16,6 @@ import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Aggregate;
 import org.apache.calcite.rel.core.AggregateCall;
-import org.apache.calcite.sql.SqlKind;
 import org.opensearch.analytics.exec.QueryContext;
 import org.opensearch.analytics.planner.CapabilityRegistry;
 import org.opensearch.analytics.planner.dag.Stage;
@@ -131,23 +130,16 @@ final class LocalStageScheduler implements StageScheduler {
     private static ArrowType resolveIntermediateArrowType(
         AggregateCall call, String backendId, CapabilityRegistry registry
     ) {
-        if (backendId == null || registry == null) return null;
-        AggregateFunction func = AggregateFunction.fromSqlKind(call.getAggregation().getKind());
-        // APPROX_COUNT_DISTINCT has SqlKind.COUNT — check by name when approximate
-        if (func == AggregateFunction.COUNT && call.isApproximate()) {
-            try { func = AggregateFunction.fromNameOrError(call.getAggregation().getName()); }
-            catch (IllegalArgumentException ignored) {}
-        }
+        if (backendId == null) return null;
+        AggregateFunction func = AggregateFunction.fromAggregateCall(call);
         if (func == null) return null;
         return registry.getIntermediateArrowType(backendId, func);
     }
 
     private static Aggregate findAggregate(RelNode node) {
         if (node instanceof Aggregate agg) return agg;
-        for (RelNode input : node.getInputs()) {
-            Aggregate found = findAggregate(input);
-            if (found != null) return found;
-        }
+        // Only unwrap single-input schema-transparent nodes (Project, Sort) to reach the aggregate
+        if (node.getInputs().size() == 1) return findAggregate(node.getInputs().get(0));
         return null;
     }
 }

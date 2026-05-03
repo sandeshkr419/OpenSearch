@@ -38,6 +38,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -103,6 +104,14 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
     private static final byte AGG_MODE_PARTIAL = 0x01;
     private static final byte AGG_MODE_FINAL   = 0x02;
 
+    /**
+     * Substrait function name → DataFusion function name remappings.
+     * Isthmus uses Substrait spec names; DataFusion may use different names.
+     */
+    private static final Map<String, String> FUNCTION_RENAMES = Map.of(
+        "approx_count_distinct", "approx_distinct"
+    );
+
     @Override
     public byte[] attachPartialAggOnTop(RelNode partialAggFragment, byte[] innerBytes) {
         LOGGER.debug("Attaching partial aggregate on top of {} inner bytes", innerBytes.length);
@@ -115,7 +124,7 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
     @Override
     public byte[] convertFinalAggFragment(RelNode fragment) {
         LOGGER.debug("Converting final-aggregate fragment");
-        RelNode fixed = fixApproxCountDistinctInputType(fragment);
+        RelNode fixed = fixIntermediateInputTypes(fragment);
         RelNode rewritten = rewriteStageInputScans(fixed);
         return withModePrefix(AGG_MODE_FINAL, convertToSubstrait(rewritten));
     }
@@ -130,7 +139,9 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
     @Override
     public byte[] attachFragmentOnTop(RelNode fragment, byte[] innerBytes) {
         LOGGER.debug("Attaching generic fragment [{}] on top of {} inner bytes", fragment.getClass().getSimpleName(), innerBytes.length);
-        // Preserve the mode prefix (if any) set by attachPartialAggOnTop/convertFinalAggFragment
+        // Preserve the mode prefix from the inner bytes so the Rust side applies the correct
+        // aggregation mode to the full plan (including this wrapper). The mode is set once by
+        // convertFinalAggFragment and propagated outward through any wrapper fragments.
         byte modeByte = innerBytes.length > 0 ? innerBytes[0] : 0;
         byte[] planBytes = modeByte == AGG_MODE_PARTIAL || modeByte == AGG_MODE_FINAL
             ? Arrays.copyOfRange(innerBytes, 1, innerBytes.length)
@@ -166,7 +177,7 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         plan = new TableNameModifier().modifyTableNames(plan);
 
         io.substrait.proto.Plan protoPlan = new PlanProtoConverter().toProto(plan);
-        protoPlan = renameExtensionFunction(protoPlan, "approx_count_distinct", "approx_distinct");
+        protoPlan = renameExtensionFunctions(protoPlan, FUNCTION_RENAMES);
         byte[] bytes = protoPlan.toByteArray();
         LOGGER.debug("Substrait plan: {} bytes", bytes.length);
         return bytes;
@@ -262,13 +273,12 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
      * implemented.
      */
     /**
-     * For FINAL aggregates containing approx_count_distinct, the StageInputScan's row type
-     * has BIGINT for those columns (from the PARTIAL aggregate's declared output type).
-     * But the PARTIAL actually emits binary HLL sketches. This method rewrites the
-     * StageInputScan's row type to use VARBINARY for approx_count_distinct columns so
-     * the Substrait NamedScan schema matches the actual streaming table schema.
+     * Rewrites the {@link OpenSearchStageInputScan} row type for aggregate calls whose
+     * intermediate Arrow type (declared via {@code AggregateCapability.intermediateArrowType()})
+     * differs from the Calcite-declared return type. This ensures the Substrait
+     * {@code NamedScan} schema matches the actual streaming table schema.
      */
-    private static RelNode fixApproxCountDistinctInputType(RelNode node) {
+    private static RelNode fixIntermediateInputTypes(RelNode node) {
         if (!(node instanceof org.apache.calcite.rel.core.Aggregate agg)) {
             return node;
         }
@@ -330,7 +340,8 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         RelDataTypeFactory typeFactory = relNode.getCluster().getTypeFactory();
         TypeConverter typeConverter = TypeConverter.DEFAULT;
 
-        AggregateFunctionConverter aggConverter = new AggregateFunctionConverter(extensions.aggregateFunctions(), typeFactory);        ScalarFunctionConverter scalarConverter = new ScalarFunctionConverter(
+        AggregateFunctionConverter aggConverter = new AggregateFunctionConverter(extensions.aggregateFunctions(), typeFactory);
+        ScalarFunctionConverter scalarConverter = new ScalarFunctionConverter(
             extensions.scalarFunctions(),
             ADDITIONAL_SCALAR_SIGS,
             typeFactory,
@@ -363,13 +374,13 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
     /** Serializes a model-level {@link Plan} to proto bytes. */
     private static byte[] serializePlan(Plan plan) {
         io.substrait.proto.Plan proto = new PlanProtoConverter().toProto(plan);
-        proto = renameExtensionFunction(proto, "approx_count_distinct", "approx_distinct");
+        proto = renameExtensionFunctions(proto, FUNCTION_RENAMES);
         return proto.toByteArray();
     }
 
-    /** Renames a function in the plan's extension declarations. Handles compound names like "fn:type". */
-    private static io.substrait.proto.Plan renameExtensionFunction(
-        io.substrait.proto.Plan plan, String from, String to
+    /** Renames functions in the plan's extension declarations per the given from→to map. Handles compound names like "fn:type". */
+    private static io.substrait.proto.Plan renameExtensionFunctions(
+        io.substrait.proto.Plan plan, Map<String, String> renames
     ) {
         boolean changed = false;
         io.substrait.proto.Plan.Builder builder = plan.toBuilder();
@@ -377,8 +388,10 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
             io.substrait.proto.SimpleExtensionDeclaration ext = plan.getExtensions(i);
             if (ext.hasExtensionFunction()) {
                 String name = ext.getExtensionFunction().getName();
-                if (name.equals(from) || name.startsWith(from + ":")) {
-                    String newName = to + name.substring(from.length());
+                String base = name.contains(":") ? name.substring(0, name.indexOf(':')) : name;
+                String to = renames.get(base);
+                if (to != null) {
+                    String newName = to + name.substring(base.length());
                     builder.setExtensions(i, ext.toBuilder()
                         .setExtensionFunction(ext.getExtensionFunction().toBuilder().setName(newName))
                         .build());

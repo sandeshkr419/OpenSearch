@@ -199,17 +199,6 @@ impl LocalSession {
     }
 }
 
-/// Returns the default physical optimizer rules with [`CombinePartialFinalAggregate`] removed.
-/// DataFusion's combine rule recombines partial+final aggregates in the same process,
-/// undoing the distributed split. We disable it so each side runs independently.
-/// Walks a physical plan and replaces `Single`/`SinglePartitioned` mode `AggregateExec`
-/// nodes with the given `target_mode`. Used by `execute_partial_substrait` and
-/// `execute_final_substrait` to force the correct aggregation phase without relying
-/// on physical optimizer rules.
-///
-/// Only scalar aggregates (no group-by keys) are rewritten — group-by aggregates
-/// use DataFusion's native `Final(Partial(...))` structure which correctly re-groups
-/// partial states per key.
 /// Strips the 1-byte mode prefix prepended by `DataFusionFragmentConvertor`:
 ///   0x01 = partial, 0x02 = final, other/missing = default (no mode forcing).
 /// Returns `(mode_byte, plan_bytes_without_prefix)`.
@@ -217,6 +206,13 @@ pub fn strip_mode_prefix(bytes: &[u8]) -> (u8, &[u8]) {
     if bytes.is_empty() { (0, bytes) } else { (bytes[0], &bytes[1..]) }
 }
 
+/// Walks a physical plan and restructures `Final(Partial(...))` pairs for scalar aggregates
+/// (no group-by keys) to force the target aggregation mode:
+/// - `Partial`: strips the Final, keeping only the Partial so the shard emits intermediate state
+/// - `Final`: strips the Partial, connecting Final directly to the streaming table input
+///
+/// Group-by aggregates are left unchanged — DataFusion's native `Final(Partial(...))` structure
+/// correctly re-groups partial states per key.
 pub fn force_aggregate_mode(
     plan: Arc<dyn datafusion::physical_plan::ExecutionPlan>,
     target_mode: AggregateMode,
@@ -273,6 +269,9 @@ fn find_partial_input(
     None
 }
 
+/// Returns the default physical optimizer rules with [`CombinePartialFinalAggregate`] removed.
+/// That rule recombines partial+final aggregates into a single pass, undoing the distributed
+/// split. Disabling it keeps `Final(Partial(...))` pairs intact for `force_aggregate_mode`.
 pub fn physical_optimizer_rules_without_combine(
 ) -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
     let combine_name = CombinePartialFinalAggregate::new().name().to_string();

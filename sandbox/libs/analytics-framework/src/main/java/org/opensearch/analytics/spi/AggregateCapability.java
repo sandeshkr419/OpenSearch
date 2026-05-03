@@ -82,9 +82,4 @@ public record AggregateCapability(AggregateFunction function, Set<FieldType> fie
         assert function.getType() == AggregateFunction.Type.APPROXIMATE;
         return new AggregateCapability(function, fieldTypes, formats, null, intermediateArrowType);
     }
-
-    public static AggregateCapability approximate(AggregateFunction function, Set<FieldType> fieldTypes, Set<String> formats) {
-        assert function.getType() == AggregateFunction.Type.APPROXIMATE;
-        return new AggregateCapability(function, fieldTypes, formats);
-    }
 }
