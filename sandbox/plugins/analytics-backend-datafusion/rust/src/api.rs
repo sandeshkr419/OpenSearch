@@ -563,15 +563,7 @@ pub async unsafe fn execute_local_plan(
     // `context_id` of 0 disables tracking (pool is not consulted).
     let query_context = QueryTrackingContext::new(context_id, session.memory_pool());
 
-    // Read the 1-byte mode prefix set by DataFusionFragmentConvertor:
-    //   0x01 = partial (shard emits intermediate state)
-    //   0x02 = final   (coordinator merges partial state)
-    //   other/missing  = default (no mode forcing)
-    let (mode_byte, plan_bytes) = if substrait_bytes.is_empty() {
-        (0u8, substrait_bytes)
-    } else {
-        (substrait_bytes[0], &substrait_bytes[1..])
-    };
+    let (mode_byte, plan_bytes) = crate::local_executor::strip_mode_prefix(substrait_bytes);
 
     let df_stream = match mode_byte {
         0x01 => session.execute_partial_substrait(plan_bytes).await?,

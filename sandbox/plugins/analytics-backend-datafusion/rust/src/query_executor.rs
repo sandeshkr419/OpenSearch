@@ -124,14 +124,7 @@ pub async fn execute_query(
     })?;
 
     // Decode substrait → logical plan → physical plan → stream
-    // Read the 1-byte mode prefix set by DataFusionFragmentConvertor:
-    //   0x01 = partial (force AggregateMode::Partial for scalar aggregates)
-    //   other/missing  = default (no mode forcing)
-    let (mode_byte, substrait_bytes) = if plan_bytes.is_empty() {
-        (0u8, plan_bytes.as_slice())
-    } else {
-        (plan_bytes[0], &plan_bytes[1..])
-    };
+    let (mode_byte, substrait_bytes) = crate::local_executor::strip_mode_prefix(&plan_bytes);
 
     let substrait_plan = Plan::decode(substrait_bytes).map_err(|e| {
         DataFusionError::Execution(format!("Failed to decode Substrait: {}", e))

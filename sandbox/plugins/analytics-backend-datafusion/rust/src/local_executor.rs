@@ -159,10 +159,6 @@ impl LocalSession {
 
     /// Executes a Substrait plan in partial-aggregate mode.
     ///
-    /// After building the physical plan, replaces any `Single` mode `AggregateExec`
-    /// with `Partial` mode so the shard emits intermediate state (e.g. HLL sketch
-    /// bytes) rather than the final result. Called by the shard execution path via
-    /// `attachPartialAggOnTop` in `DataFusionFragmentConvertor`.
     pub async fn execute_partial_substrait(
         &self,
         bytes: &[u8],
@@ -170,11 +166,6 @@ impl LocalSession {
         self.execute_substrait_with_agg_mode(bytes, AggregateMode::Partial).await
     }
 
-    /// Executes a Substrait plan in final-aggregate mode.
-    ///
-    /// After building the physical plan, replaces any `Single` mode `AggregateExec`
-    /// with `Final` mode so the coordinator merges incoming partial state from shards.
-    /// Called by the coordinator execution path via `convertFinalAggFragment`.
     pub async fn execute_final_substrait(
         &self,
         bytes: &[u8],
@@ -219,6 +210,13 @@ impl LocalSession {
 /// Only scalar aggregates (no group-by keys) are rewritten — group-by aggregates
 /// use DataFusion's native `Final(Partial(...))` structure which correctly re-groups
 /// partial states per key.
+/// Strips the 1-byte mode prefix prepended by `DataFusionFragmentConvertor`:
+///   0x01 = partial, 0x02 = final, other/missing = default (no mode forcing).
+/// Returns `(mode_byte, plan_bytes_without_prefix)`.
+pub fn strip_mode_prefix(bytes: &[u8]) -> (u8, &[u8]) {
+    if bytes.is_empty() { (0, bytes) } else { (bytes[0], &bytes[1..]) }
+}
+
 pub fn force_aggregate_mode(
     plan: Arc<dyn datafusion::physical_plan::ExecutionPlan>,
     target_mode: AggregateMode,
