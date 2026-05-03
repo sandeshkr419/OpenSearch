@@ -43,7 +43,6 @@ use datafusion_physical_optimizer::combine_partial_final_agg::CombinePartialFina
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
-use datafusion_functions_aggregate::approx_distinct::approx_distinct_udaf;
 use prost::Message;
 use substrait::proto::Plan;
 
@@ -78,10 +77,6 @@ impl LocalSession {
             .with_physical_optimizer_rules(physical_optimizer_rules_without_combine())
             .build();
         let ctx = SessionContext::new_with_state(state);
-        // Register approx_count_distinct as an alias for approx_distinct so that
-        // Substrait plans produced by isthmus (which uses the Substrait spec name
-        // approx_count_distinct) are accepted by DataFusion's Substrait consumer.
-        register_approx_count_distinct_alias(&ctx);
         Self { ctx }
     }
 
@@ -288,16 +283,6 @@ pub fn physical_optimizer_rules_without_combine(
         .into_iter()
         .filter(|rule| rule.name() != combine_name)
         .collect()
-}
-
-/// Registers `approx_count_distinct` as an alias for DataFusion's `approx_distinct`.
-///
-/// Substrait plans produced by isthmus use the Substrait spec name `approx_count_distinct`,
-/// but DataFusion's built-in function is named `approx_distinct`. This alias bridges the gap.
-pub fn register_approx_count_distinct_alias(ctx: &SessionContext) {
-    ctx.register_udaf(
-        Arc::unwrap_or_clone(approx_distinct_udaf()).with_aliases(["approx_count_distinct"]),
-    );
 }
 
 #[cfg(test)]

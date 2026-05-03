@@ -166,6 +166,7 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         plan = new TableNameModifier().modifyTableNames(plan);
 
         io.substrait.proto.Plan protoPlan = new PlanProtoConverter().toProto(plan);
+        protoPlan = renameExtensionFunction(protoPlan, "approx_count_distinct", "approx_distinct");
         byte[] bytes = protoPlan.toByteArray();
         LOGGER.debug("Substrait plan: {} bytes", bytes.length);
         return bytes;
@@ -329,8 +330,7 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         RelDataTypeFactory typeFactory = relNode.getCluster().getTypeFactory();
         TypeConverter typeConverter = TypeConverter.DEFAULT;
 
-        AggregateFunctionConverter aggConverter = new AggregateFunctionConverter(extensions.aggregateFunctions(), typeFactory);
-        ScalarFunctionConverter scalarConverter = new ScalarFunctionConverter(
+        AggregateFunctionConverter aggConverter = new AggregateFunctionConverter(extensions.aggregateFunctions(), typeFactory);        ScalarFunctionConverter scalarConverter = new ScalarFunctionConverter(
             extensions.scalarFunctions(),
             ADDITIONAL_SCALAR_SIGS,
             typeFactory,
@@ -362,7 +362,31 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
 
     /** Serializes a model-level {@link Plan} to proto bytes. */
     private static byte[] serializePlan(Plan plan) {
-        return new PlanProtoConverter().toProto(plan).toByteArray();
+        io.substrait.proto.Plan proto = new PlanProtoConverter().toProto(plan);
+        proto = renameExtensionFunction(proto, "approx_count_distinct", "approx_distinct");
+        return proto.toByteArray();
+    }
+
+    /** Renames a function in the plan's extension declarations. Handles compound names like "fn:type". */
+    private static io.substrait.proto.Plan renameExtensionFunction(
+        io.substrait.proto.Plan plan, String from, String to
+    ) {
+        boolean changed = false;
+        io.substrait.proto.Plan.Builder builder = plan.toBuilder();
+        for (int i = 0; i < plan.getExtensionsCount(); i++) {
+            io.substrait.proto.SimpleExtensionDeclaration ext = plan.getExtensions(i);
+            if (ext.hasExtensionFunction()) {
+                String name = ext.getExtensionFunction().getName();
+                if (name.equals(from) || name.startsWith(from + ":")) {
+                    String newName = to + name.substring(from.length());
+                    builder.setExtensions(i, ext.toBuilder()
+                        .setExtensionFunction(ext.getExtensionFunction().toBuilder().setName(newName))
+                        .build());
+                    changed = true;
+                }
+            }
+        }
+        return changed ? builder.build() : plan;
     }
 
     // ── NamedScan prefix stripper ───────────────────────────────────────────────

@@ -94,7 +94,6 @@ pub async fn execute_query(
         .build();
 
     let ctx = SessionContext::new_with_state(state);
-    crate::local_executor::register_approx_count_distinct_alias(&ctx);
 
     // Register table via ListingTable — all IO goes through object store
     let file_format = ParquetFormat::new();
