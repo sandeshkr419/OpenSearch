@@ -76,6 +76,8 @@ public class CapabilityRegistry {
 
     // Decomposition index: (backendName, AggregateFunction) → AggregateDecomposition
     private final Map<DecompositionKey, org.opensearch.analytics.spi.AggregateDecomposition> decompositionIndex = new HashMap<>();
+    // Intermediate Arrow type index: (backendName, AggregateFunction) → ArrowType
+    private final Map<DecompositionKey, org.apache.arrow.vector.types.pojo.ArrowType> intermediateArrowTypeIndex = new HashMap<>();
 
     private final Function<IndexMetadata, FieldStorageResolver> fieldStorageFactory;
 
@@ -138,6 +140,9 @@ public class CapabilityRegistry {
                 }
                 if (cap.decomposition() != null) {
                     decompositionIndex.put(new DecompositionKey(name, cap.function()), cap.decomposition());
+                }
+                if (cap.intermediateArrowType() != null) {
+                    intermediateArrowTypeIndex.put(new DecompositionKey(name, cap.function()), cap.intermediateArrowType());
                 }
                 aggregateCapableBackends.add(name);
             }
@@ -301,6 +306,12 @@ public class CapabilityRegistry {
     @Nullable
     public org.opensearch.analytics.spi.AggregateDecomposition getDecomposition(String backendName, AggregateFunction function) {
         return decompositionIndex.get(new DecompositionKey(backendName, function));
+    }
+
+    /** Returns the intermediate Arrow type for the given backend+function, or null if none registered. */
+    @Nullable
+    public org.apache.arrow.vector.types.pojo.ArrowType getIntermediateArrowType(String backendName, AggregateFunction function) {
+        return intermediateArrowTypeIndex.get(new DecompositionKey(backendName, function));
     }
 
     public FieldStorageResolver resolveFieldStorage(IndexMetadata indexMetadata) {

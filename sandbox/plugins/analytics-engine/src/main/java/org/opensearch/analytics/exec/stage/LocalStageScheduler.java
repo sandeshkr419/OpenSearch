@@ -21,7 +21,6 @@ import org.opensearch.analytics.exec.QueryContext;
 import org.opensearch.analytics.planner.CapabilityRegistry;
 import org.opensearch.analytics.planner.dag.Stage;
 import org.opensearch.analytics.planner.dag.StageExecutionType;
-import org.opensearch.analytics.spi.AggregateDecomposition;
 import org.opensearch.analytics.spi.AggregateFunction;
 import org.opensearch.analytics.spi.ExchangeSink;
 import org.opensearch.analytics.spi.ExchangeSinkContext;
@@ -140,10 +139,7 @@ final class LocalStageScheduler implements StageScheduler {
             catch (IllegalArgumentException ignored) {}
         }
         if (func == null) return null;
-        AggregateDecomposition decomp = registry.getDecomposition(backendId, func);
-        if (decomp == null) return null;
-        List<org.apache.arrow.vector.types.pojo.ArrowType> types = decomp.intermediateArrowTypes();
-        return types.isEmpty() ? null : types.get(0);
+        return registry.getIntermediateArrowType(backendId, func);
     }
 
     private static Aggregate findAggregate(RelNode node) {

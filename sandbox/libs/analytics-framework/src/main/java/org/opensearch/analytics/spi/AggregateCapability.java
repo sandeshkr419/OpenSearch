@@ -41,11 +41,18 @@ import java.util.Set;
  * @opensearch.internal
  */
 public record AggregateCapability(AggregateFunction function, Set<FieldType> fieldTypes, Set<String> formats,
-    @Nullable AggregateDecomposition decomposition) {
+    @Nullable AggregateDecomposition decomposition,
+    @Nullable org.apache.arrow.vector.types.pojo.ArrowType intermediateArrowType) {
 
-    /** Convenience constructor with no custom decomposition (uses Calcite's standard). */
+    /** Convenience constructor with no custom decomposition and no intermediate type override. */
     public AggregateCapability(AggregateFunction function, Set<FieldType> fieldTypes, Set<String> formats) {
-        this(function, fieldTypes, formats, null);
+        this(function, fieldTypes, formats, null, null);
+    }
+
+    /** Convenience constructor with decomposition but no intermediate type override. */
+    public AggregateCapability(AggregateFunction function, Set<FieldType> fieldTypes, Set<String> formats,
+        @Nullable AggregateDecomposition decomposition) {
+        this(function, fieldTypes, formats, decomposition, null);
     }
 
     public static AggregateCapability simple(AggregateFunction function, Set<FieldType> fieldTypes, Set<String> formats) {
@@ -61,6 +68,18 @@ public record AggregateCapability(AggregateFunction function, Set<FieldType> fie
     public static AggregateCapability stateExpanding(AggregateFunction function, Set<FieldType> fieldTypes, Set<String> formats) {
         assert function.getType() == AggregateFunction.Type.STATE_EXPANDING;
         return new AggregateCapability(function, fieldTypes, formats);
+    }
+
+    /**
+     * Factory for approximate functions that emit non-standard intermediate state.
+     * {@code intermediateArrowType} declares the Arrow type of the partial output
+     * (e.g. {@code Binary} for HLL sketch bytes), used by the coordinator to set
+     * the correct streaming table schema.
+     */
+    public static AggregateCapability approximate(AggregateFunction function, Set<FieldType> fieldTypes,
+        Set<String> formats, org.apache.arrow.vector.types.pojo.ArrowType intermediateArrowType) {
+        assert function.getType() == AggregateFunction.Type.APPROXIMATE;
+        return new AggregateCapability(function, fieldTypes, formats, null, intermediateArrowType);
     }
 
     public static AggregateCapability approximate(AggregateFunction function, Set<FieldType> fieldTypes, Set<String> formats) {

@@ -38,12 +38,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 
-import io.substrait.expression.AggregateFunctionInvocation;
-import io.substrait.expression.Expression;
 import io.substrait.extension.SimpleExtension;
 import io.substrait.isthmus.ImmutableFeatureBoard;
 import io.substrait.isthmus.SubstraitRelVisitor;
@@ -250,37 +247,6 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         throw new UnsupportedOperationException(
             "Cannot attach-on-top a Substrait Rel of type " + wrapper.getClass().getSimpleName() + " — no single-input rewire defined"
         );
-    }
-
-    /**
-     * Overrides the {@link Expression.AggregationPhase} on every {@link Aggregate.Measure}
-     * inside an {@link Aggregate} wrapper. No-op for non-aggregate wrappers.
-     *
-     * <p>Isthmus hardcodes {@code INITIAL_TO_RESULT} on every aggregate-function
-     * invocation. For the partial-agg-attach-on-shard path we want
-     * {@code INITIAL_TO_INTERMEDIATE}; the final-agg path stays at
-     * {@code INITIAL_TO_RESULT} (isthmus's default) which the DataFusion
-     * substrait deserialiser treats as the single-stage/final form.
-     */
-    private static Rel withAggregationPhase(Rel rel, Expression.AggregationPhase phase) {
-        if (!(rel instanceof Aggregate agg)) {
-            return rel;
-        }
-        // Only set INITIAL_TO_INTERMEDIATE for functions that have meaningful intermediate state.
-        // MIN and MAX don't benefit from partial mode in DataFusion's Substrait consumer —
-        // setting INITIAL_TO_INTERMEDIATE on them causes type errors.
-        Set<String> partialFunctions = Set.of("sum", "count", "approx_count_distinct");
-        List<Aggregate.Measure> newMeasures = new ArrayList<>(agg.getMeasures().size());
-        for (Aggregate.Measure m : agg.getMeasures()) {
-            String funcName = m.getFunction().declaration().name().toLowerCase(Locale.ROOT);
-            if (partialFunctions.contains(funcName)) {
-                AggregateFunctionInvocation rephased = AggregateFunctionInvocation.builder().from(m.getFunction()).aggregationPhase(phase).build();
-                newMeasures.add(Aggregate.Measure.builder().from(m).function(rephased).build());
-            } else {
-                newMeasures.add(m);
-            }
-        }
-        return Aggregate.builder().from(agg).measures(newMeasures).build();
     }
 
     /**

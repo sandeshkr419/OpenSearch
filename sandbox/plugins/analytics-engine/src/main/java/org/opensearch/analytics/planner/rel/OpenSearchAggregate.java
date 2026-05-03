@@ -17,8 +17,6 @@ import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.rel.logical.LogicalAggregate;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.util.ImmutableBitSet;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.opensearch.analytics.planner.RelNodeUtils;
 import org.opensearch.analytics.spi.FieldStorageInfo;
 
@@ -33,7 +31,6 @@ import java.util.function.Function;
  */
 public class OpenSearchAggregate extends Aggregate implements OpenSearchRelNode {
 
-    private static final Logger LOGGER = LogManager.getLogger(OpenSearchAggregate.class);
     private final List<String> viableBackends;
     private final AggregateMode mode;
 

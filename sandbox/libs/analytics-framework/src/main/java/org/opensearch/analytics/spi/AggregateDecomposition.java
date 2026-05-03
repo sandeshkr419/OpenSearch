@@ -57,20 +57,4 @@ public interface AggregateDecomposition {
      * For HLL: a call to the backend's HLL_MERGE function over {@code partialRefs.get(0)}.
      */
     RexNode finalExpression(RexBuilder rexBuilder, List<RexNode> partialRefs);
-
-    /**
-     * The Arrow data types for each column emitted by the PARTIAL phase, in the same
-     * order as {@link #partialCalls}. Return {@code null} for a column to use the
-     * Calcite-inferred Arrow type (the default for standard aggregates).
-     *
-     * <p>Override when the backend's actual intermediate state type differs from the
-     * Calcite-declared return type of the partial aggregate call. For example,
-     * {@code approx_count_distinct} declares {@code BIGINT} in Calcite but DataFusion
-     * emits binary HLL sketch bytes in partial mode.
-     *
-     * <p>The default implementation returns {@code null} for all columns (use Calcite types).
-     */
-    default List<org.apache.arrow.vector.types.pojo.ArrowType> intermediateArrowTypes() {
-        return List.of();
-    }
 }

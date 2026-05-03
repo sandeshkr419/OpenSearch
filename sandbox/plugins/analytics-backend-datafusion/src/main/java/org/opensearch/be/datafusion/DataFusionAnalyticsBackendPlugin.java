@@ -125,7 +125,8 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
                 for (AggregateFunction func : AGG_FUNCTIONS) {
                     for (FieldType type : SUPPORTED_FIELD_TYPES) {
                         if (func == AggregateFunction.APPROX_COUNT_DISTINCT) {
-                            caps.add(new AggregateCapability(func, Set.of(type), formats, HllDecomposition.INSTANCE));
+                            caps.add(AggregateCapability.approximate(func, Set.of(type), formats,
+                                org.apache.arrow.vector.types.pojo.ArrowType.Binary.INSTANCE));
                         } else {
                             caps.add(AggregateCapability.simple(func, Set.of(type), formats));
                         }
