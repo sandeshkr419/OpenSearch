@@ -12,10 +12,10 @@ import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.types.pojo.Schema;
-import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Aggregate;
 import org.apache.calcite.rel.core.AggregateCall;
+import org.apache.calcite.rel.type.RelDataTypeField;
 import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.opensearch.analytics.exec.QueryContext;
 import org.opensearch.analytics.planner.CapabilityRegistry;
@@ -110,9 +110,7 @@ final class LocalStageScheduler implements StageScheduler {
         }
 
         // Determine the backend for this child stage to look up decompositions
-        String backendId = child.getPlanAlternatives().isEmpty()
-            ? null
-            : child.getPlanAlternatives().getFirst().backendId();
+        String backendId = child.getPlanAlternatives().isEmpty() ? null : child.getPlanAlternatives().getFirst().backendId();
 
         List<Field> fields = new ArrayList<>();
         int groupCount = agg.getGroupSet().cardinality();
@@ -137,9 +135,7 @@ final class LocalStageScheduler implements StageScheduler {
      * Returns the intermediate Arrow type for a partial aggregate call if the
      * backend's decomposition declares one, or {@code null} to use the Calcite type.
      */
-    private static ArrowType resolveIntermediateArrowType(
-        AggregateCall call, String backendId, CapabilityRegistry registry
-    ) {
+    private static ArrowType resolveIntermediateArrowType(AggregateCall call, String backendId, CapabilityRegistry registry) {
         if (backendId == null) return null;
         AggregateFunction func = AggregateFunction.fromAggregateCall(call);
         if (func == null) return null;

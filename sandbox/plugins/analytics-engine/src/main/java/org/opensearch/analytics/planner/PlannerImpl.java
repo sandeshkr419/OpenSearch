@@ -27,7 +27,6 @@ import org.apache.calcite.rel.rules.AggregateReduceFunctionsRule;
 import org.apache.calcite.rel.rules.ReduceExpressionsRule;
 import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.tools.RelBuilder;
-import java.util.EnumSet;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.analytics.planner.rel.OpenSearchDistributionTraitDef;
@@ -38,6 +37,7 @@ import org.opensearch.analytics.planner.rules.OpenSearchProjectRule;
 import org.opensearch.analytics.planner.rules.OpenSearchSortRule;
 import org.opensearch.analytics.planner.rules.OpenSearchTableScanRule;
 
+import java.util.EnumSet;
 import java.util.List;
 
 /**
@@ -89,8 +89,7 @@ public class PlannerImpl {
                 new ReduceExpressionsRule.ProjectReduceExpressionsRule(Project.class, RelBuilder.proto(Contexts.empty())),
                 // Rewrite AVG → SUM/COUNT + Project before marking so backends receive
                 // only primitive aggregates (SUM, COUNT) that they natively support.
-                new AggregateReduceFunctionsRule(Aggregate.class,
-                    RelBuilder.proto(Contexts.empty()), EnumSet.of(SqlKind.AVG))
+                new AggregateReduceFunctionsRule(Aggregate.class, RelBuilder.proto(Contexts.empty()), EnumSet.of(SqlKind.AVG))
             )
         );
 

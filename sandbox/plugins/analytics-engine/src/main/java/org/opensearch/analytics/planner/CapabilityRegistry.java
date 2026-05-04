@@ -13,7 +13,6 @@ import org.opensearch.analytics.spi.AggregateCapability;
 import org.opensearch.analytics.spi.AggregateDecomposition;
 import org.opensearch.analytics.spi.AggregateFunction;
 import org.opensearch.analytics.spi.AnalyticsSearchBackendPlugin;
-import org.opensearch.common.Nullable;
 import org.opensearch.analytics.spi.BackendCapabilityProvider;
 import org.opensearch.analytics.spi.DelegationType;
 import org.opensearch.analytics.spi.EngineCapability;
@@ -24,6 +23,7 @@ import org.opensearch.analytics.spi.ProjectCapability;
 import org.opensearch.analytics.spi.ScalarFunction;
 import org.opensearch.analytics.spi.ScanCapability;
 import org.opensearch.cluster.metadata.IndexMetadata;
+import org.opensearch.common.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashMap;

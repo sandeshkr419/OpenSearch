@@ -9,8 +9,8 @@
 package org.opensearch.analytics.spi;
 
 import org.apache.arrow.memory.BufferAllocator;
-import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.apache.arrow.vector.types.pojo.Schema;
+import org.opensearch.analytics.backend.AggregateExecutionMode;
 
 /**
  * Context passed to {@link ExchangeSinkProvider#createSink} when a
@@ -44,8 +44,14 @@ public record ExchangeSinkContext(String queryId, int stageId, byte[] fragmentBy
     ExchangeSink downstream, AggregateExecutionMode mode) {
 
     /** Convenience constructor with default mode (0 = no mode forcing). */
-    public ExchangeSinkContext(String queryId, int stageId, byte[] fragmentBytes, BufferAllocator allocator, Schema inputSchema,
-        ExchangeSink downstream) {
+    public ExchangeSinkContext(
+        String queryId,
+        int stageId,
+        byte[] fragmentBytes,
+        BufferAllocator allocator,
+        Schema inputSchema,
+        ExchangeSink downstream
+    ) {
         this(queryId, stageId, fragmentBytes, allocator, inputSchema, downstream, AggregateExecutionMode.DEFAULT);
     }
 }

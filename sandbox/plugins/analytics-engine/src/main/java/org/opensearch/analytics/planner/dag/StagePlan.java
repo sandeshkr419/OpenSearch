@@ -26,13 +26,8 @@ import java.util.Map;
  * @param delegatedQueries  serialized delegated queries keyed by annotationId (empty if no delegation)
  * @opensearch.internal
  */
-public record StagePlan(
-    RelNode resolvedFragment,
-    String backendId,
-    byte[] convertedBytes,
-    Map<Integer, byte[]> delegatedQueries,
-    AggregateExecutionMode mode
-) {
+public record StagePlan(RelNode resolvedFragment, String backendId, byte[] convertedBytes, Map<Integer, byte[]> delegatedQueries,
+    AggregateExecutionMode mode) {
 
     /** Creates a StagePlan before conversion (bytes not yet available). */
     public StagePlan(RelNode resolvedFragment, String backendId) {

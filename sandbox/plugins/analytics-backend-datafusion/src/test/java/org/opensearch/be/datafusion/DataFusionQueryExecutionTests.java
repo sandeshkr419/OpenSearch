@@ -8,8 +8,6 @@
 
 package org.opensearch.be.datafusion;
 
-import org.opensearch.analytics.backend.AggregateExecutionMode;
-
 import org.apache.arrow.c.ArrowArray;
 import org.apache.arrow.c.ArrowSchema;
 import org.apache.arrow.c.CDataDictionaryProvider;
@@ -17,6 +15,7 @@ import org.apache.arrow.c.Data;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.types.pojo.Schema;
+import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.opensearch.be.datafusion.nativelib.NativeBridge;
 import org.opensearch.be.datafusion.nativelib.ReaderHandle;
 import org.opensearch.be.datafusion.nativelib.StreamHandle;

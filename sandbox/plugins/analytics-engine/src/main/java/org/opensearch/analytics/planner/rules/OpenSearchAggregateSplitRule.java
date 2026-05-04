@@ -106,9 +106,14 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
         // Partial aggregate: runs on each shard
         RelTraitSet partialTraits = child.getTraitSet().replace(OpenSearchConvention.INSTANCE);
         OpenSearchAggregate partial = new OpenSearchAggregate(
-            aggregate.getCluster(), partialTraits, child,
-            aggregate.getGroupSet(), aggregate.getGroupSets(),
-            partialCalls, AggregateMode.PARTIAL, aggregate.getViableBackends()
+            aggregate.getCluster(),
+            partialTraits,
+            child,
+            aggregate.getGroupSet(),
+            aggregate.getGroupSets(),
+            partialCalls,
+            AggregateMode.PARTIAL,
+            aggregate.getViableBackends()
         );
 
         // Request SINGLETON distribution — Volcano inserts Exchange automatically
@@ -124,9 +129,14 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
             finalAggCalls.add(pc.adaptTo(gathered, List.of(groupCount + pi), pc.filterArg, groupCount, aggregate.getGroupCount()));
         }
         OpenSearchAggregate finalAggregate = new OpenSearchAggregate(
-            aggregate.getCluster(), singletonTraits, gathered,
-            aggregate.getGroupSet(), aggregate.getGroupSets(),
-            finalAggCalls, AggregateMode.FINAL, aggregate.getViableBackends()
+            aggregate.getCluster(),
+            singletonTraits,
+            gathered,
+            aggregate.getGroupSet(),
+            aggregate.getGroupSets(),
+            finalAggCalls,
+            AggregateMode.FINAL,
+            aggregate.getViableBackends()
         );
 
         // If no decompositions, the final aggregate is the result directly
@@ -158,11 +168,17 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
             }
             projectNames.add(origCall.name != null ? origCall.name : "expr$" + i);
         }
-        call.transformTo(new OpenSearchProject(
-            aggregate.getCluster(), singletonTraits, finalAggregate, projectExprs,
-            aggregate.getCluster().getTypeFactory().createStructType(
-                projectExprs.stream().map(RexNode::getType).toList(), projectNames),
-            aggregate.getViableBackends()
-        ));
+        call.transformTo(
+            new OpenSearchProject(
+                aggregate.getCluster(),
+                singletonTraits,
+                finalAggregate,
+                projectExprs,
+                aggregate.getCluster()
+                    .getTypeFactory()
+                    .createStructType(projectExprs.stream().map(RexNode::getType).toList(), projectNames),
+                aggregate.getViableBackends()
+            )
+        );
     }
 }

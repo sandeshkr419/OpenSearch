@@ -19,12 +19,12 @@ import org.apache.calcite.rel.RelDistributions;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.RelReferentialConstraint;
 import org.apache.calcite.rel.RelRoot;
+import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.rel.core.TableScan;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.schema.ColumnStrategy;
-import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.util.ImmutableBitSet;
@@ -49,8 +49,6 @@ import io.substrait.isthmus.expression.AggregateFunctionConverter;
 import io.substrait.isthmus.expression.FunctionMappings;
 import io.substrait.isthmus.expression.ScalarFunctionConverter;
 import io.substrait.isthmus.expression.WindowFunctionConverter;
-import io.substrait.relation.RelCopyOnWriteVisitor;
-import io.substrait.util.EmptyVisitationContext;
 import io.substrait.plan.Plan;
 import io.substrait.plan.PlanProtoConverter;
 import io.substrait.plan.ProtoPlanConverter;
@@ -59,7 +57,9 @@ import io.substrait.relation.Filter;
 import io.substrait.relation.NamedScan;
 import io.substrait.relation.Project;
 import io.substrait.relation.Rel;
+import io.substrait.relation.RelCopyOnWriteVisitor;
 import io.substrait.relation.Sort;
+import io.substrait.util.EmptyVisitationContext;
 
 /**
  * Converts Calcite RelNode fragments to Substrait protobuf bytes
@@ -120,9 +120,7 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
      * Substrait function name → DataFusion function name remappings.
      * Isthmus uses Substrait spec names; DataFusion may use different names.
      */
-    private static final Map<String, String> FUNCTION_RENAMES = Map.of(
-        "approx_count_distinct", "approx_distinct"
-    );
+    private static final Map<String, String> FUNCTION_RENAMES = Map.of("approx_count_distinct", "approx_distinct");
 
     @Override
     public byte[] attachFragmentOnTop(RelNode fragment, byte[] innerBytes) {
@@ -132,8 +130,10 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         // doesn't traverse into nodes it can't handle (e.g. StageInputScan from stripped
         // reduce-stage trees). The rewire step replaces this dummy with the actual inner plan.
         RelNode dummyChild = new StageInputTableScan(
-            fragment.getCluster(), fragment.getTraitSet(),
-            "dummy", fragment.getInputs().getFirst().getRowType()
+            fragment.getCluster(),
+            fragment.getTraitSet(),
+            "dummy",
+            fragment.getInputs().getFirst().getRowType()
         );
         RelNode withDummy = fragment.copy(fragment.getTraitSet(), List.of(dummyChild));
         Rel wrapper = convertStandalone(withDummy);
@@ -202,8 +202,7 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
     private static List<String> deriveNames(Rel rel, List<String> innerNames) {
         if (rel instanceof Aggregate agg) {
             List<String> names = new ArrayList<>();
-            for (io.substrait.expression.Expression expr : agg.getGroupings().stream()
-                .flatMap(g -> g.getExpressions().stream()).toList()) {
+            for (io.substrait.expression.Expression expr : agg.getGroupings().stream().flatMap(g -> g.getExpressions().stream()).toList()) {
                 names.add("group_" + names.size());
             }
             for (Aggregate.Measure m : agg.getMeasures()) {
@@ -357,9 +356,7 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
     }
 
     /** Renames functions in the plan's extension declarations per the given from→to map. Handles compound names like "fn:type". */
-    private static io.substrait.proto.Plan renameExtensionFunctions(
-        io.substrait.proto.Plan plan, Map<String, String> renames
-    ) {
+    private static io.substrait.proto.Plan renameExtensionFunctions(io.substrait.proto.Plan plan, Map<String, String> renames) {
         boolean changed = false;
         io.substrait.proto.Plan.Builder builder = plan.toBuilder();
         for (int i = 0; i < plan.getExtensionsCount(); i++) {
@@ -370,9 +367,10 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
                 String to = renames.get(base);
                 if (to != null) {
                     String newName = to + name.substring(base.length());
-                    builder.setExtensions(i, ext.toBuilder()
-                        .setExtensionFunction(ext.getExtensionFunction().toBuilder().setName(newName))
-                        .build());
+                    builder.setExtensions(
+                        i,
+                        ext.toBuilder().setExtensionFunction(ext.getExtensionFunction().toBuilder().setName(newName)).build()
+                    );
                     changed = true;
                 }
             }

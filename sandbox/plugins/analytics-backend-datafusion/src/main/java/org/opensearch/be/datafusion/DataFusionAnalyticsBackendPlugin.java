@@ -21,8 +21,8 @@ import org.opensearch.analytics.spi.FieldType;
 import org.opensearch.analytics.spi.FilterCapability;
 import org.opensearch.analytics.spi.FragmentConvertor;
 import org.opensearch.analytics.spi.ProjectCapability;
-import org.opensearch.analytics.spi.ScanCapability;
 import org.opensearch.analytics.spi.ScalarFunction;
+import org.opensearch.analytics.spi.ScanCapability;
 import org.opensearch.analytics.spi.SearchExecEngineProvider;
 import org.opensearch.index.engine.dataformat.DataFormatRegistry;
 
@@ -130,8 +130,7 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
                 for (AggregateFunction func : AGG_FUNCTIONS) {
                     for (FieldType type : SUPPORTED_FIELD_TYPES) {
                         if (func == AggregateFunction.APPROX_COUNT_DISTINCT) {
-                            caps.add(AggregateCapability.approximate(func, Set.of(type), formats,
-                                ArrowType.Binary.INSTANCE));
+                            caps.add(AggregateCapability.approximate(func, Set.of(type), formats, ArrowType.Binary.INSTANCE));
                         } else {
                             caps.add(AggregateCapability.simple(func, Set.of(type), formats));
                         }
@@ -156,17 +155,22 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
             public Map<AggregateFunction, UnaryOperator<AggregateCall>> aggregateCallAdapters() {
                 // Rewrite COUNT(DISTINCT x) → APPROX_COUNT_DISTINCT(x): DataFusion uses HLL
                 // for approximate distinct counting in distributed execution.
-                return Map.of(
-                    AggregateFunction.COUNT,
-                    call -> {
-                        if (!call.isDistinct() || call.isApproximate()) return call;
-                        return AggregateCall.create(
-                            SqlStdOperatorTable.APPROX_COUNT_DISTINCT,
-                            true, true, call.ignoreNulls(), call.rexList, call.getArgList(),
-                            call.filterArg, call.distinctKeys, call.collation, call.type, call.name
-                        );
-                    }
-                );
+                return Map.of(AggregateFunction.COUNT, call -> {
+                    if (!call.isDistinct() || call.isApproximate()) return call;
+                    return AggregateCall.create(
+                        SqlStdOperatorTable.APPROX_COUNT_DISTINCT,
+                        true,
+                        true,
+                        call.ignoreNulls(),
+                        call.rexList,
+                        call.getArgList(),
+                        call.filterArg,
+                        call.distinctKeys,
+                        call.collation,
+                        call.type,
+                        call.name
+                    );
+                });
             }
         };
     }

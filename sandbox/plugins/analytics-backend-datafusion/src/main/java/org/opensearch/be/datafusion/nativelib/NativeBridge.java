@@ -186,7 +186,13 @@ public final class NativeBridge {
         // i64 df_prepare_local_plan(session_ptr, substrait_ptr, substrait_len, mode)
         PREPARE_LOCAL_PLAN = linker.downcallHandle(
             lib.find("df_prepare_local_plan").orElseThrow(),
-            FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT)
+            FunctionDescriptor.of(
+                ValueLayout.JAVA_LONG,
+                ValueLayout.JAVA_LONG,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_LONG,
+                ValueLayout.JAVA_INT
+            )
         );
 
         // i64 df_execute_prepared_plan(session_ptr, plan_ptr)

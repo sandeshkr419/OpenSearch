@@ -125,10 +125,14 @@ public class BackendPlanAdapter {
         }
         if (callsChanged || childrenChanged) {
             return new OpenSearchAggregate(
-                agg.getCluster(), agg.getTraitSet(),
+                agg.getCluster(),
+                agg.getTraitSet(),
                 childrenChanged ? adaptedChildren.getFirst() : agg.getInput(),
-                agg.getGroupSet(), agg.getGroupSets(), adaptedCalls,
-                agg.getMode(), agg.getViableBackends()
+                agg.getGroupSet(),
+                agg.getGroupSets(),
+                adaptedCalls,
+                agg.getMode(),
+                agg.getViableBackends()
             );
         }
         return agg;

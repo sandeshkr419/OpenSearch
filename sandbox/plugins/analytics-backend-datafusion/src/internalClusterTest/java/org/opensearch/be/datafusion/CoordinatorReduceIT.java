@@ -160,9 +160,7 @@ public class CoordinatorReduceIT extends OpenSearchIntegTestCase {
         long expectedMin = 1;
         long expectedMax = totalDocs;
 
-        PPLResponse response = executePPL(
-            "source = " + index + " | stats sum(value) as s, min(value) as lo, max(value) as hi"
-        );
+        PPLResponse response = executePPL("source = " + index + " | stats sum(value) as s, min(value) as lo, max(value) as hi");
 
         assertNotNull("PPLResponse must not be null", response);
         assertEquals("scalar agg must return exactly 1 row", 1, response.getRows().size());
@@ -196,8 +194,10 @@ public class CoordinatorReduceIT extends OpenSearchIntegTestCase {
         long actual = ((Number) response.getRows().get(0)[0]).longValue();
         int totalDocs = NUM_SHARDS * DOCS_PER_SHARD;
         // HLL is approximate — allow 10% deviation
-        assertTrue("dc(value) should be approximately " + totalDocs + ", got " + actual,
-            actual >= totalDocs * 0.9 && actual <= totalDocs * 1.1);
+        assertTrue(
+            "dc(value) should be approximately " + totalDocs + ", got " + actual,
+            actual >= totalDocs * 0.9 && actual <= totalDocs * 1.1
+        );
     }
 
     private void createParquetBackedIndex() {

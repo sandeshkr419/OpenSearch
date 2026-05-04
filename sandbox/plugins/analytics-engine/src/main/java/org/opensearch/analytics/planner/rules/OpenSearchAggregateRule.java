@@ -204,9 +204,17 @@ public class OpenSearchAggregateRule extends RelOptRule {
         }
         LOGGER.debug("fixAggCallType: {} type {} → {}", aggCall.getAggregation().getName(), aggCall.type, inferred);
         return AggregateCall.create(
-            aggCall.getAggregation(), aggCall.isDistinct(), aggCall.isApproximate(),
-            aggCall.ignoreNulls(), aggCall.rexList, aggCall.getArgList(), aggCall.filterArg,
-            aggCall.distinctKeys, aggCall.collation, inferred, aggCall.name
+            aggCall.getAggregation(),
+            aggCall.isDistinct(),
+            aggCall.isApproximate(),
+            aggCall.ignoreNulls(),
+            aggCall.rexList,
+            aggCall.getArgList(),
+            aggCall.filterArg,
+            aggCall.distinctKeys,
+            aggCall.collation,
+            inferred,
+            aggCall.name
         );
     }
 }

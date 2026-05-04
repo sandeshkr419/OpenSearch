@@ -53,7 +53,11 @@ public class StageExecutionBuilder {
      * of {@link StageExecutionType}.
      */
     @Inject
-    public StageExecutionBuilder(ClusterService clusterService, AnalyticsSearchTransportService dispatcher, CapabilityRegistry capabilityRegistry) {
+    public StageExecutionBuilder(
+        ClusterService clusterService,
+        AnalyticsSearchTransportService dispatcher,
+        CapabilityRegistry capabilityRegistry
+    ) {
         this.schedulers = new HashMap<>();
         registerScheduler(StageExecutionType.SHARD_FRAGMENT, new ShardFragmentStageScheduler(clusterService, dispatcher));
         registerScheduler(StageExecutionType.COORDINATOR_REDUCE, new LocalStageScheduler(capabilityRegistry));
