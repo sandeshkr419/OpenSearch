@@ -118,7 +118,7 @@ public class OpenSearchProject extends Project implements OpenSearchRelNode {
 
     @Override
     public RelNode stripAnnotations(List<RelNode> strippedChildren) {
-        return stripAnnotations(strippedChildren, OperatorAnnotation::unwrap);
+        return stripAnnotations(strippedChildren, annotated -> stripRexAnnotations(annotated.unwrap()));
     }
 
     @Override
