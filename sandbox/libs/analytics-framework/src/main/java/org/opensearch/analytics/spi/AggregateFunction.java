@@ -86,8 +86,9 @@ public enum AggregateFunction {
         }
         AggregateFunction func = fromSqlKind(call.getAggregation().getKind());
         if (func == null) {
-            try { func = fromNameOrError(call.getAggregation().getName()); }
-            catch (IllegalStateException ignored) {}
+            try {
+                func = fromNameOrError(call.getAggregation().getName());
+            } catch (IllegalStateException ignored) {}
         }
         return func;
     }

@@ -42,8 +42,7 @@ import java.util.Set;
  * @opensearch.internal
  */
 public record AggregateCapability(AggregateFunction function, Set<FieldType> fieldTypes, Set<String> formats,
-    @Nullable AggregateDecomposition decomposition,
-    @Nullable ArrowType intermediateArrowType) {
+    @Nullable AggregateDecomposition decomposition, @Nullable ArrowType intermediateArrowType) {
 
     /** Convenience constructor with no custom decomposition and no intermediate type override. */
     public AggregateCapability(AggregateFunction function, Set<FieldType> fieldTypes, Set<String> formats) {
@@ -51,8 +50,12 @@ public record AggregateCapability(AggregateFunction function, Set<FieldType> fie
     }
 
     /** Convenience constructor with decomposition but no intermediate type override. */
-    public AggregateCapability(AggregateFunction function, Set<FieldType> fieldTypes, Set<String> formats,
-        @Nullable AggregateDecomposition decomposition) {
+    public AggregateCapability(
+        AggregateFunction function,
+        Set<FieldType> fieldTypes,
+        Set<String> formats,
+        @Nullable AggregateDecomposition decomposition
+    ) {
         this(function, fieldTypes, formats, decomposition, null);
     }
 
@@ -77,8 +80,12 @@ public record AggregateCapability(AggregateFunction function, Set<FieldType> fie
      * (e.g. {@code Binary} for HLL sketch bytes), used by the coordinator to set
      * the correct streaming table schema.
      */
-    public static AggregateCapability approximate(AggregateFunction function, Set<FieldType> fieldTypes,
-        Set<String> formats, ArrowType intermediateArrowType) {
+    public static AggregateCapability approximate(
+        AggregateFunction function,
+        Set<FieldType> fieldTypes,
+        Set<String> formats,
+        ArrowType intermediateArrowType
+    ) {
         assert function.getType() == AggregateFunction.Type.APPROXIMATE;
         return new AggregateCapability(function, fieldTypes, formats, null, intermediateArrowType);
     }

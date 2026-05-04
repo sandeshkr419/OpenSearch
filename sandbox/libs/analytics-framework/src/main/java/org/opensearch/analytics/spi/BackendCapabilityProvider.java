@@ -8,10 +8,11 @@
 
 package org.opensearch.analytics.spi;
 
+import org.apache.calcite.rel.core.AggregateCall;
+
 import java.util.Map;
 import java.util.Set;
 import java.util.function.UnaryOperator;
-import org.apache.calcite.rel.core.AggregateCall;
 
 /**
  * Declares the query planning capabilities of a backend plugin.
