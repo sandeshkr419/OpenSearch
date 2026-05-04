@@ -110,6 +110,7 @@ public class AnalyticsSearchService {
             SearchShardTask searchShardTask = null; // TODO: real task for cancellation
             ExecutionContext ctx = new ExecutionContext(request.getShardId().getIndexName(), searchShardTask, gatedReader.get());
             ctx.setFragmentBytes(selectedPlan.getFragmentBytes());
+            ctx.setMode(selectedPlan.getMode());
 
             AnalyticsSearchBackendPlugin backend = backends.get(selectedPlan.getBackendId());
 

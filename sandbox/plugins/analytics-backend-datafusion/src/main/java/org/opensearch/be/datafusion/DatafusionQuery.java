@@ -8,6 +8,8 @@
 
 package org.opensearch.be.datafusion;
 
+import org.opensearch.analytics.backend.AggregateExecutionMode;
+
 /**
  * Represents a DataFusion query — wraps substrait plan bytes and execution metadata.
  */
@@ -17,17 +19,17 @@ public class DatafusionQuery {
     private final byte[] substraitBytes;
     private boolean fetchPhase;
     private long contextId;
+    private final AggregateExecutionMode mode;
 
-    /**
-     * Creates a query with the given index name and serialized substrait plan.
-     * @param indexName the target index name
-     * @param substraitBytes the serialized substrait plan bytes
-     * @param contextId the query context ID for per-query memory tracking (0 if unavailable)
-     */
-    public DatafusionQuery(String indexName, byte[] substraitBytes, long contextId) {
+    public DatafusionQuery(String indexName, byte[] substraitBytes, long contextId, AggregateExecutionMode mode) {
         this.indexName = indexName;
         this.substraitBytes = substraitBytes;
         this.contextId = contextId;
+        this.mode = mode;
+    }
+
+    public DatafusionQuery(String indexName, byte[] substraitBytes, long contextId) {
+        this(indexName, substraitBytes, contextId, AggregateExecutionMode.DEFAULT);
     }
 
     /** Returns the target index name. */
@@ -56,5 +58,10 @@ public class DatafusionQuery {
     /** Returns the query context ID for per-query memory tracking. */
     public long getContextId() {
         return contextId;
+    }
+
+    /** Returns the aggregation execution mode. */
+    public AggregateExecutionMode getMode() {
+        return mode;
     }
 }

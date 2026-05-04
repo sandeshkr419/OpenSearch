@@ -8,6 +8,8 @@
 
 package org.opensearch.be.datafusion;
 
+import org.opensearch.analytics.backend.AggregateExecutionMode;
+
 import org.apache.arrow.c.ArrowArray;
 import org.apache.arrow.c.ArrowSchema;
 import org.apache.arrow.c.CDataDictionaryProvider;
@@ -103,6 +105,7 @@ public class DataFusionQueryExecutionTests extends OpenSearchTestCase {
                 substraitBytes,
                 runtimeHandle.get(),
                 0L,
+                AggregateExecutionMode.DEFAULT,
                 listener
             )
         );

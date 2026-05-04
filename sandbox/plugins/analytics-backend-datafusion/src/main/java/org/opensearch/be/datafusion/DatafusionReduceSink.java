@@ -74,7 +74,13 @@ public final class DatafusionReduceSink extends AbstractDatafusionReduceSink {
         try {
             senderPtr = NativeBridge.registerPartitionStream(session.getPointer(), INPUT_ID, schemaIpc);
             this.sender = new DatafusionPartitionSender(senderPtr);
-            streamPtr = NativeBridge.executeLocalPlan(session.getPointer(), ctx.fragmentBytes());
+            long planPtr = NativeBridge.preparePlan(session.getPointer(), ctx.fragmentBytes(), ctx.mode());
+            try {
+                streamPtr = NativeBridge.executePreparedPlan(session.getPointer(), planPtr);
+            } catch (RuntimeException e) {
+                NativeBridge.freePreparedPlan(planPtr);
+                throw e;
+            }
             this.outStream = new StreamHandle(streamPtr, runtimeHandle);
         } catch (RuntimeException e) {
             if (streamPtr != 0) {

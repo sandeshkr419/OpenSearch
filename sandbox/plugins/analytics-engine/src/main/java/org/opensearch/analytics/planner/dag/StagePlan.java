@@ -9,6 +9,7 @@
 package org.opensearch.analytics.planner.dag;
 
 import org.apache.calcite.rel.RelNode;
+import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.opensearch.analytics.spi.FragmentConvertor;
 
 import java.util.Map;
@@ -25,15 +26,31 @@ import java.util.Map;
  * @param delegatedQueries  serialized delegated queries keyed by annotationId (empty if no delegation)
  * @opensearch.internal
  */
-public record StagePlan(RelNode resolvedFragment, String backendId, byte[] convertedBytes, Map<Integer, byte[]> delegatedQueries) {
+public record StagePlan(
+    RelNode resolvedFragment,
+    String backendId,
+    byte[] convertedBytes,
+    Map<Integer, byte[]> delegatedQueries,
+    AggregateExecutionMode mode
+) {
 
     /** Creates a StagePlan before conversion (bytes not yet available). */
     public StagePlan(RelNode resolvedFragment, String backendId) {
-        this(resolvedFragment, backendId, null, Map.of());
+        this(resolvedFragment, backendId, null, Map.of(), AggregateExecutionMode.DEFAULT);
     }
 
     /** Returns a copy with converted bytes and delegated queries populated. */
     public StagePlan withConvertedBytes(byte[] bytes, Map<Integer, byte[]> delegatedQueries) {
-        return new StagePlan(resolvedFragment, backendId, bytes, delegatedQueries);
+        return new StagePlan(resolvedFragment, backendId, bytes, delegatedQueries, mode);
+    }
+
+    /** Returns a copy with converted bytes populated. */
+    public StagePlan withConvertedBytes(byte[] bytes) {
+        return new StagePlan(resolvedFragment, backendId, bytes, delegatedQueries, mode);
+    }
+
+    /** Returns a copy with converted bytes and execution mode. */
+    public StagePlan withConvertedBytes(byte[] bytes, AggregateExecutionMode mode) {
+        return new StagePlan(resolvedFragment, backendId, bytes, delegatedQueries, mode);
     }
 }

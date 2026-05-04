@@ -105,12 +105,13 @@ pub unsafe extern "C" fn df_execute_query(
     plan_len: i64,
     runtime_ptr: i64,
     context_id: i64,
+    mode: i32,
 ) -> i64 {
     let mgr = get_rt_manager()?;
     let table_name = str_from_raw(table_name_ptr, table_name_len).map_err(|e| format!("df_execute_query: {}", e))?;
     let plan_bytes = slice::from_raw_parts(plan_ptr, plan_len as usize);
     mgr.io_runtime
-        .block_on(api::execute_query(shard_view_ptr, table_name, plan_bytes, runtime_ptr, &mgr, context_id))
+        .block_on(api::execute_query(shard_view_ptr, table_name, plan_bytes, runtime_ptr, &mgr, context_id, mode))
         .map_err(|e| e.to_string())
 }
 
@@ -206,6 +207,62 @@ pub unsafe extern "C" fn df_register_partition_stream(
 
 #[ffm_safe]
 #[no_mangle]
+pub unsafe extern "C" fn df_prepare_local_plan(
+    session_ptr: i64,
+    substrait_ptr: *const u8,
+    substrait_len: i64,
+    mode: i32,
+) -> i64 {
+    let mgr = get_rt_manager()?;
+    let bytes_vec = slice::from_raw_parts(substrait_ptr, substrait_len as usize).to_vec();
+    let mgr_for_spawn = Arc::clone(&mgr);
+    mgr.io_runtime
+        .block_on(async move {
+            let inner_fut = async move {
+                unsafe { api::prepare_local_plan(session_ptr, &bytes_vec, mode).await }
+            };
+            match mgr_for_spawn.cpu_executor().spawn(inner_fut).await {
+                Ok(r) => r,
+                Err(e) => Err(datafusion::error::DataFusionError::Execution(format!(
+                    "prepare_local_plan: CPU spawn failed: {e:?}"
+                ))),
+            }
+        })
+        .map_err(|e| e.to_string())
+}
+
+#[ffm_safe]
+#[no_mangle]
+pub unsafe extern "C" fn df_execute_prepared_plan(
+    session_ptr: i64,
+    plan_ptr: i64,
+) -> i64 {
+    let mgr = get_rt_manager()?;
+    let mgr_for_inner = Arc::clone(&mgr);
+    let mgr_for_spawn = Arc::clone(&mgr);
+    mgr.io_runtime
+        .block_on(async move {
+            let inner_fut = async move {
+                unsafe { api::execute_prepared_plan(session_ptr, plan_ptr, &mgr_for_inner, 0).await }
+            };
+            match mgr_for_spawn.cpu_executor().spawn(inner_fut).await {
+                Ok(r) => r,
+                Err(e) => Err(datafusion::error::DataFusionError::Execution(format!(
+                    "execute_prepared_plan: CPU spawn failed: {e:?}"
+                ))),
+            }
+        })
+        .map_err(|e| e.to_string())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn df_free_prepared_plan(plan_ptr: i64) {
+    api::free_prepared_plan(plan_ptr);
+}
+
+#[ffm_safe]
+#[no_mangle]
+#[deprecated(note = "Use df_prepare_local_plan + df_execute_prepared_plan instead")]
 pub unsafe extern "C" fn df_execute_local_plan(
     session_ptr: i64,
     substrait_ptr: *const u8,

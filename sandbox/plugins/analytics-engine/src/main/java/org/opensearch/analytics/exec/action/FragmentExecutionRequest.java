@@ -10,6 +10,7 @@ package org.opensearch.analytics.exec.action;
 
 import org.opensearch.action.ActionRequest;
 import org.opensearch.action.ActionRequestValidationException;
+import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.opensearch.analytics.exec.task.AnalyticsShardTask;
 import org.opensearch.core.common.io.stream.StreamInput;
 import org.opensearch.core.common.io.stream.StreamOutput;
@@ -104,21 +105,33 @@ public class FragmentExecutionRequest extends ActionRequest {
     public static class PlanAlternative {
         private final String backendId;
         private final byte[] fragmentBytes;
+        private final AggregateExecutionMode mode;
 
-        public PlanAlternative(String backendId, byte[] fragmentBytes) {
+        public PlanAlternative(String backendId, byte[] fragmentBytes, AggregateExecutionMode mode) {
             this.backendId = backendId;
             this.fragmentBytes = fragmentBytes;
+            this.mode = mode;
+        }
+
+        public PlanAlternative(String backendId, byte[] fragmentBytes) {
+            this(backendId, fragmentBytes, AggregateExecutionMode.DEFAULT);
         }
 
         public PlanAlternative(StreamInput in) throws IOException {
             this.backendId = in.readString();
             byte[] bytes = in.readByteArray();
             this.fragmentBytes = (bytes.length == 0) ? null : bytes;
+            int modeValue = in.readVInt();
+            this.mode = java.util.Arrays.stream(AggregateExecutionMode.values())
+                .filter(m -> m.value() == modeValue)
+                .findFirst()
+                .orElseThrow(() -> new java.io.IOException("Unknown AggregateExecutionMode value: " + modeValue));
         }
 
         public void writeTo(StreamOutput out) throws IOException {
             out.writeString(backendId);
             out.writeByteArray(fragmentBytes != null ? fragmentBytes : new byte[0]);
+            out.writeVInt(mode.value());
         }
 
         public String getBackendId() {
@@ -127,6 +140,10 @@ public class FragmentExecutionRequest extends ActionRequest {
 
         public byte[] getFragmentBytes() {
             return fragmentBytes;
+        }
+
+        public AggregateExecutionMode getMode() {
+            return mode;
         }
     }
 }

@@ -8,6 +8,7 @@
 
 package org.opensearch.be.datafusion.nativelib;
 
+import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.opensearch.analytics.backend.jni.NativeHandle;
 import org.opensearch.core.action.ActionListener;
 import org.opensearch.nativebridge.spi.NativeCall;
@@ -55,6 +56,9 @@ public final class NativeBridge {
     private static final MethodHandle CLOSE_LOCAL_SESSION;
     private static final MethodHandle REGISTER_PARTITION_STREAM;
     private static final MethodHandle EXECUTE_LOCAL_PLAN;
+    private static final MethodHandle PREPARE_LOCAL_PLAN;
+    private static final MethodHandle EXECUTE_PREPARED_PLAN;
+    private static final MethodHandle FREE_PREPARED_PLAN;
     private static final MethodHandle SENDER_SEND;
     private static final MethodHandle SENDER_CLOSE;
     private static final MethodHandle REGISTER_MEMTABLE;
@@ -113,7 +117,8 @@ public final class NativeBridge {
                 ValueLayout.ADDRESS,
                 ValueLayout.JAVA_LONG,
                 ValueLayout.JAVA_LONG,
-                ValueLayout.JAVA_LONG
+                ValueLayout.JAVA_LONG,
+                ValueLayout.JAVA_INT  // mode: 0=default, 1=partial, 2=final
             )
         );
 
@@ -176,6 +181,24 @@ public final class NativeBridge {
         EXECUTE_LOCAL_PLAN = linker.downcallHandle(
             lib.find("df_execute_local_plan").orElseThrow(),
             FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG)
+        );
+
+        // i64 df_prepare_local_plan(session_ptr, substrait_ptr, substrait_len, mode)
+        PREPARE_LOCAL_PLAN = linker.downcallHandle(
+            lib.find("df_prepare_local_plan").orElseThrow(),
+            FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT)
+        );
+
+        // i64 df_execute_prepared_plan(session_ptr, plan_ptr)
+        EXECUTE_PREPARED_PLAN = linker.downcallHandle(
+            lib.find("df_execute_prepared_plan").orElseThrow(),
+            FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG)
+        );
+
+        // void df_free_prepared_plan(plan_ptr)
+        FREE_PREPARED_PLAN = linker.downcallHandle(
+            lib.find("df_free_prepared_plan").orElseThrow(),
+            FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG)
         );
 
         // i64 df_sender_send(sender_ptr, array_ptr, schema_ptr)
@@ -262,6 +285,7 @@ public final class NativeBridge {
         byte[] substraitPlan,
         long runtimePtr,
         long contextId,
+        AggregateExecutionMode mode,
         ActionListener<Long> listener
     ) {
         try {
@@ -281,7 +305,8 @@ public final class NativeBridge {
                 call.bytes(substraitPlan),
                 (long) substraitPlan.length,
                 runtimePtr,
-                contextId
+                contextId,
+                mode.value()
             );
             listener.onResponse(result);
         } catch (Throwable t) {
@@ -380,11 +405,44 @@ public final class NativeBridge {
     /**
      * Executes a Substrait plan on the session, returning an opaque stream pointer. The stream is
      * drained via {@link #streamNext} and freed by {@link #streamClose}.
+     *
+     * @deprecated Use {@link #preparePlan} + {@link #executePreparedPlan} instead.
      */
+    @Deprecated
     public static long executeLocalPlan(long sessionPtr, byte[] substrait) {
         NativeHandle.validatePointer(sessionPtr, "session");
         try (var call = new NativeCall()) {
             return call.invoke(EXECUTE_LOCAL_PLAN, sessionPtr, call.bytes(substrait), (long) substrait.length);
+        }
+    }
+
+    /**
+     * Prepares a Substrait plan for execution, applying the given aggregation mode.
+     * Returns an opaque physical plan pointer that must be passed to {@link #executePreparedPlan}
+     * or freed via {@link #freePreparedPlan}.
+     *
+     * @param mode 0=default, 1=partial (shard emits intermediate state), 2=final (coordinator merges)
+     */
+    public static long preparePlan(long sessionPtr, byte[] substrait, AggregateExecutionMode mode) {
+        NativeHandle.validatePointer(sessionPtr, "session");
+        try (var call = new NativeCall()) {
+            return call.invoke(PREPARE_LOCAL_PLAN, sessionPtr, call.bytes(substrait), (long) substrait.length, mode.value());
+        }
+    }
+
+    /** Executes a prepared physical plan returned by {@link #preparePlan}. Consumes the plan pointer. */
+    public static long executePreparedPlan(long sessionPtr, long planPtr) {
+        NativeHandle.validatePointer(sessionPtr, "session");
+        if (planPtr == 0) throw new IllegalArgumentException("plan pointer is null");
+        try (var call = new NativeCall()) {
+            return call.invoke(EXECUTE_PREPARED_PLAN, sessionPtr, planPtr);
+        }
+    }
+
+    /** Frees a prepared plan pointer without executing it. */
+    public static void freePreparedPlan(long planPtr) {
+        if (planPtr != 0) {
+            NativeCall.invokeVoid(FREE_PREPARED_PLAN, planPtr);
         }
     }
 

@@ -35,7 +35,6 @@ import org.opensearch.analytics.spi.DelegatedPredicateFunction;
 import org.opensearch.analytics.spi.FragmentConvertor;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -100,9 +99,22 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         return convertToSubstrait(fragment);
     }
 
-    /** Mode byte prepended to plan bytes so the Rust side knows the aggregation phase. */
-    private static final byte AGG_MODE_PARTIAL = 0x01;
-    private static final byte AGG_MODE_FINAL   = 0x02;
+    @Override
+    public byte[] attachPartialAggOnTop(RelNode partialAggFragment, byte[] innerBytes) {
+        LOGGER.debug("Attaching partial aggregate on top of {} inner bytes", innerBytes.length);
+        Plan inner = decodePlan(innerBytes);
+        Rel wrapper = convertStandalone(partialAggFragment);
+        Plan rewired = rewire(inner, wrapper);
+        return serializePlan(rewired);
+    }
+
+    @Override
+    public byte[] convertFinalAggFragment(RelNode fragment) {
+        LOGGER.debug("Converting final-aggregate fragment");
+        RelNode fixed = fixIntermediateInputTypes(fragment);
+        RelNode rewritten = rewriteStageInputScans(fixed);
+        return convertToSubstrait(rewritten);
+    }
 
     /**
      * Substrait function name → DataFusion function name remappings.
@@ -113,40 +125,9 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
     );
 
     @Override
-    public byte[] attachPartialAggOnTop(RelNode partialAggFragment, byte[] innerBytes) {
-        LOGGER.debug("Attaching partial aggregate on top of {} inner bytes", innerBytes.length);
-        Plan inner = decodePlan(innerBytes);
-        Rel wrapper = convertStandalone(partialAggFragment);
-        Plan rewired = rewire(inner, wrapper);
-        return withModePrefix(AGG_MODE_PARTIAL, serializePlan(rewired));
-    }
-
-    @Override
-    public byte[] convertFinalAggFragment(RelNode fragment) {
-        LOGGER.debug("Converting final-aggregate fragment");
-        RelNode fixed = fixIntermediateInputTypes(fragment);
-        RelNode rewritten = rewriteStageInputScans(fixed);
-        return withModePrefix(AGG_MODE_FINAL, convertToSubstrait(rewritten));
-    }
-
-    private static byte[] withModePrefix(byte mode, byte[] planBytes) {
-        byte[] result = new byte[1 + planBytes.length];
-        result[0] = mode;
-        System.arraycopy(planBytes, 0, result, 1, planBytes.length);
-        return result;
-    }
-
-    @Override
     public byte[] attachFragmentOnTop(RelNode fragment, byte[] innerBytes) {
         LOGGER.debug("Attaching generic fragment [{}] on top of {} inner bytes", fragment.getClass().getSimpleName(), innerBytes.length);
-        // Preserve the mode prefix from the inner bytes so the Rust side applies the correct
-        // aggregation mode to the full plan (including this wrapper). The mode is set once by
-        // convertFinalAggFragment and propagated outward through any wrapper fragments.
-        byte modeByte = innerBytes.length > 0 ? innerBytes[0] : 0;
-        byte[] planBytes = modeByte == AGG_MODE_PARTIAL || modeByte == AGG_MODE_FINAL
-            ? Arrays.copyOfRange(innerBytes, 1, innerBytes.length)
-            : innerBytes;
-        Plan inner = decodePlan(planBytes);
+        Plan inner = decodePlan(innerBytes);
         // Replace the fragment's child with a dummy TableScan so the Substrait visitor
         // doesn't traverse into nodes it can't handle (e.g. StageInputScan from stripped
         // reduce-stage trees). The rewire step replaces this dummy with the actual inner plan.
@@ -156,10 +137,7 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         );
         RelNode withDummy = fragment.copy(fragment.getTraitSet(), List.of(dummyChild));
         Rel wrapper = convertStandalone(withDummy);
-        byte[] result = serializePlan(rewire(inner, wrapper));
-        return (modeByte == AGG_MODE_PARTIAL || modeByte == AGG_MODE_FINAL)
-            ? withModePrefix(modeByte, result)
-            : result;
+        return serializePlan(rewire(inner, wrapper));
     }
 
     // ── Core conversion helpers ─────────────────────────────────────────────────

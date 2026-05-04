@@ -39,11 +39,8 @@ pub async fn execute_query(
     plan_bytes: Vec<u8>,
     runtime: &DataFusionRuntime,
     cpu_executor: DedicatedExecutor,
-    // Per-query memory pool, or None when context_id is 0 (tracking disabled).
-    // Not all query flows pass a context_id yet; this fallback allows queries
-    // to execute using the global pool. Can be made required once all flows
-    // wire up context_id correctly.
     query_memory_pool: Option<Arc<dyn datafusion::execution::memory_pool::MemoryPool>>,
+    mode: i32,
 ) -> Result<i64, DataFusionError> {
     // Pre-populate the list-files cache so DataFusion doesn't re-list the directory
     let list_file_cache = Arc::new(DefaultListFilesCache::default());
@@ -124,9 +121,8 @@ pub async fn execute_query(
     })?;
 
     // Decode substrait → logical plan → physical plan → stream
-    let (mode_byte, substrait_bytes) = crate::local_executor::strip_mode_prefix(&plan_bytes);
-
-    let substrait_plan = Plan::decode(substrait_bytes).map_err(|e| {
+    // Decode substrait → logical plan → physical plan → stream
+    let substrait_plan = Plan::decode(plan_bytes.as_slice()).map_err(|e| {
         DataFusionError::Execution(format!("Failed to decode Substrait: {}", e))
     })?;
 
@@ -134,11 +130,11 @@ pub async fn execute_query(
     let dataframe = ctx.execute_logical_plan(logical_plan).await?;
     let mut physical_plan = dataframe.create_physical_plan().await?;
 
-    if mode_byte == 0x01 {
-        physical_plan = crate::local_executor::force_aggregate_mode(
-            physical_plan, crate::local_executor::AggregateMode::Partial
-        )?;
-    }
+    physical_plan = match mode {
+        0 => physical_plan,
+        1 => crate::local_executor::force_aggregate_mode(physical_plan, crate::local_executor::AggregateMode::Partial)?,
+        _ => return Err(DataFusionError::Execution(format!("Unknown aggregation mode: {mode}"))),
+    };
 
     let df_stream = execute_stream(physical_plan, ctx.task_ctx()).map_err(|e| {
         error!("Failed to create execution stream: {}", e);

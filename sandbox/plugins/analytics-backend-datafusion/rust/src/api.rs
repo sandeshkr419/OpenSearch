@@ -165,6 +165,9 @@ use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::execution::RecordBatchStream;
 use datafusion::prelude::SessionConfig;
+use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
+use prost::Message;
+use substrait::proto::Plan;
 use futures::TryStreamExt;
 
 use crate::cross_rt_stream::CrossRtStream;
@@ -313,6 +316,7 @@ pub async unsafe fn execute_query(
     runtime_ptr: i64,
     manager: &RuntimeManager,
     context_id: i64,
+    mode: i32,
 ) -> Result<i64, DataFusionError> {
     let shard_view = &*(shard_view_ptr as *const ShardView);
     let runtime = &*(runtime_ptr as *const DataFusionRuntime);
@@ -335,6 +339,7 @@ pub async unsafe fn execute_query(
         runtime,
         cpu_executor,
         query_memory_pool,
+        mode,
     )
     .await?;
 
@@ -537,6 +542,67 @@ pub unsafe fn register_partition_stream(
 }
 
 /// Executes a Substrait plan against a `LocalSession` and returns a
+/// Prepares a Substrait plan for coordinator execution, applying the given aggregation mode.
+/// Returns an opaque pointer to the prepared physical plan.
+/// The caller must pass this to `execute_prepared_plan` and then free via `free_prepared_plan`.
+///
+/// `mode`: 0 = default, 1 = partial, 2 = final
+///
+/// # Safety
+/// `session_ptr` must be a valid pointer returned by `create_local_session`.
+pub async unsafe fn prepare_local_plan(
+    session_ptr: i64,
+    substrait_bytes: &[u8],
+    mode: i32,
+) -> Result<i64, DataFusionError> {
+    let session = &*(session_ptr as *const LocalSession);
+    let plan = Plan::decode(substrait_bytes).map_err(|e| {
+        DataFusionError::Execution(format!("Failed to decode Substrait plan: {}", e))
+    })?;
+    let logical_plan = from_substrait_plan(&session.state(), &plan).await?;
+    let df = session.execute_logical_plan(logical_plan).await?;
+    let physical_plan = df.create_physical_plan().await?;
+    let physical_plan = match mode {
+        0 => physical_plan,
+        1 => crate::local_executor::force_aggregate_mode(physical_plan, crate::local_executor::AggregateMode::Partial)?,
+        2 => crate::local_executor::force_aggregate_mode(physical_plan, crate::local_executor::AggregateMode::Final)?,
+        _ => return Err(DataFusionError::Execution(format!("Unknown aggregation mode: {mode}"))),
+    };
+    Ok(Box::into_raw(Box::new(physical_plan)) as i64)
+}
+
+/// Executes a prepared physical plan returned by `prepare_local_plan`. Consumes the plan pointer.
+///
+/// # Safety
+/// `plan_ptr` must be a valid pointer returned by `prepare_local_plan`.
+pub async unsafe fn execute_prepared_plan(
+    session_ptr: i64,
+    plan_ptr: i64,
+    manager: &RuntimeManager,
+    context_id: i64,
+) -> Result<i64, DataFusionError> {
+    let session = &*(session_ptr as *const LocalSession);
+    let physical_plan = *Box::from_raw(
+        plan_ptr as *mut Arc<dyn datafusion::physical_plan::ExecutionPlan>
+    );
+    let query_context = QueryTrackingContext::new(context_id, session.memory_pool());
+    let df_stream = datafusion::physical_plan::execute_stream(physical_plan, session.task_ctx())?;
+    let cross_rt_stream = CrossRtStream::new_with_df_error_stream(df_stream, manager.cpu_executor());
+    let wrapped = RecordBatchStreamAdapter::new(cross_rt_stream.schema(), cross_rt_stream);
+    let handle = QueryStreamHandle::new(wrapped, query_context);
+    Ok(Box::into_raw(Box::new(handle)) as i64)
+}
+
+/// Frees a prepared plan pointer without executing it.
+///
+/// # Safety
+/// `plan_ptr` must be a valid pointer returned by `prepare_local_plan`.
+pub unsafe fn free_prepared_plan(plan_ptr: i64) {
+    if plan_ptr != 0 {
+        drop(Box::from_raw(plan_ptr as *mut Arc<dyn datafusion::physical_plan::ExecutionPlan>));
+    }
+}
+
 /// `QueryStreamHandle` pointer whose output can be drained via the existing
 /// `stream_next` / `stream_close` exports.
 ///
@@ -563,13 +629,7 @@ pub async unsafe fn execute_local_plan(
     // `context_id` of 0 disables tracking (pool is not consulted).
     let query_context = QueryTrackingContext::new(context_id, session.memory_pool());
 
-    let (mode_byte, plan_bytes) = crate::local_executor::strip_mode_prefix(substrait_bytes);
-
-    let df_stream = match mode_byte {
-        0x01 => session.execute_partial_substrait(plan_bytes).await?,
-        0x02 => session.execute_final_substrait(plan_bytes).await?,
-        _    => session.execute_substrait(plan_bytes).await?,
-    };
+    let df_stream = session.execute_substrait(substrait_bytes).await?;
 
     // Wrap the output in the same CrossRtStream + RecordBatchStreamAdapter
     // shape as `execute_query`, so existing `stream_next` / `stream_close`

@@ -80,6 +80,8 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
         // All viable backends for a resolved plan alternative share the same decompositions
         // (decomposition is registered per-backend, and plan forking ensures a single backend
         // is chosen). Using getFirst() is safe here.
+        // TODO: if aggregate delegation (e.g. Painless) is introduced, multiple backends may
+        // be viable with different decompositions — this will need revisiting.
         String backend = aggregate.getViableBackends().getFirst();
 
         // Build PARTIAL aggCalls, expanding any decomposed functions.

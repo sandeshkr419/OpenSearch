@@ -17,6 +17,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.analytics.planner.CapabilityRegistry;
 import org.opensearch.analytics.planner.rel.AggregateMode;
+import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
 import org.opensearch.analytics.planner.rel.OpenSearchExchangeReducer;
 import org.opensearch.analytics.planner.rel.OpenSearchRelNode;
@@ -82,7 +83,10 @@ public class FragmentConversionDriver {
             FragmentConvertor convertor = backend.getFragmentConvertor();
             IntraOperatorDelegationBytes delegationBytes = new IntraOperatorDelegationBytes(registry);
             byte[] bytes = convert(plan.resolvedFragment(), convertor, delegationBytes);
-            converted.add(plan.withConvertedBytes(bytes, delegationBytes.getResult()));
+            AggregateExecutionMode mode = (plan.resolvedFragment() instanceof OpenSearchAggregate agg
+                && agg.getMode() == AggregateMode.PARTIAL)
+                ? AggregateExecutionMode.PARTIAL : AggregateExecutionMode.DEFAULT;
+            converted.add(new StagePlan(plan.resolvedFragment(), plan.backendId(), bytes, delegationBytes.getResult(), mode));
         }
         stage.setPlanAlternatives(converted);
     }

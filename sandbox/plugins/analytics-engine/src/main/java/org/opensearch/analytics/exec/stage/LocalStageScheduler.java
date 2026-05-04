@@ -16,6 +16,7 @@ import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Aggregate;
 import org.apache.calcite.rel.core.AggregateCall;
+import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.opensearch.analytics.exec.QueryContext;
 import org.opensearch.analytics.planner.CapabilityRegistry;
 import org.opensearch.analytics.planner.dag.Stage;
@@ -52,13 +53,17 @@ final class LocalStageScheduler implements StageScheduler {
     @Override
     public StageExecution createExecution(Stage stage, ExchangeSink sink, QueryContext config) {
         ExchangeSinkProvider provider = stage.getExchangeSinkProvider();
+        byte[] planBytes = chosenBytes(stage);
+        // Coordinator-reduce stages always execute in final-aggregate mode (2).
+        // The shard path uses mode 1 (partial), set in DatafusionSearchExecEngine.
         ExchangeSinkContext context = new ExchangeSinkContext(
             config.queryId(),
             stage.getStageId(),
-            chosenBytes(stage),
+            planBytes,
             config.bufferAllocator(),
             deriveInputSchema(stage, capabilityRegistry),
-            sink
+            sink,
+            AggregateExecutionMode.FINAL
         );
         ExchangeSink backendSink;
         try {
@@ -82,6 +87,11 @@ final class LocalStageScheduler implements StageScheduler {
      * Derives the backend's input Arrow schema from the single child stage's
      * fragment rowtype. Multi-child support (joins, set ops with heterogeneous
      * inputs) is deferred.
+     *
+     * <p>TODO: this schema derivation belongs in the planner, not the scheduler.
+     * The intermediate Arrow type should be determined during plan forking/resolution
+     * and carried on the {@link org.opensearch.analytics.planner.dag.StagePlan} so
+     * the scheduler only reads it — scheduling should not become another planner.
      */
     private static Schema deriveInputSchema(Stage stage, CapabilityRegistry capabilityRegistry) {
         List<Stage> children = stage.getChildStages();

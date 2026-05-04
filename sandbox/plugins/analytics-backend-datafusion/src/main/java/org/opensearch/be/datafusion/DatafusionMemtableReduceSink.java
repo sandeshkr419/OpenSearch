@@ -83,7 +83,8 @@ public final class DatafusionMemtableReduceSink extends AbstractDatafusionReduce
             }
             NativeBridge.registerMemtable(session.getPointer(), INPUT_ID, schemaIpc, arrayPtrs, schemaPtrs);
 
-            streamPtr = NativeBridge.executeLocalPlan(session.getPointer(), ctx.fragmentBytes());
+            long planPtr = NativeBridge.preparePlan(session.getPointer(), ctx.fragmentBytes(), ctx.mode());
+            streamPtr = NativeBridge.executePreparedPlan(session.getPointer(), planPtr);
             try (StreamHandle outStream = new StreamHandle(streamPtr, runtimeHandle)) {
                 streamPtr = 0;
                 drainOutputIntoDownstream(outStream);

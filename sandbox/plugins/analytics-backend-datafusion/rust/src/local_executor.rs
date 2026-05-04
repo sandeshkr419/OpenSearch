@@ -197,13 +197,21 @@ impl LocalSession {
     pub fn memory_pool(&self) -> Arc<dyn MemoryPool> {
         Arc::clone(&self.ctx.runtime_env().memory_pool)
     }
-}
 
-/// Strips the 1-byte mode prefix prepended by `DataFusionFragmentConvertor`:
-///   0x01 = partial, 0x02 = final, other/missing = default (no mode forcing).
-/// Returns `(mode_byte, plan_bytes_without_prefix)`.
-pub fn strip_mode_prefix(bytes: &[u8]) -> (u8, &[u8]) {
-    if bytes.is_empty() { (0, bytes) } else { (bytes[0], &bytes[1..]) }
+    pub fn state(&self) -> datafusion::execution::SessionState {
+        self.ctx.state()
+    }
+
+    pub async fn execute_logical_plan(
+        &self,
+        plan: datafusion::logical_expr::LogicalPlan,
+    ) -> datafusion_common::Result<datafusion::dataframe::DataFrame> {
+        self.ctx.execute_logical_plan(plan).await
+    }
+
+    pub fn task_ctx(&self) -> Arc<datafusion::execution::TaskContext> {
+        self.ctx.task_ctx()
+    }
 }
 
 /// Walks a physical plan and restructures `Final(Partial(...))` pairs for scalar aggregates

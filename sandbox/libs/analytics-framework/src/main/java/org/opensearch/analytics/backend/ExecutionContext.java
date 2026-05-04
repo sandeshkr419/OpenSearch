@@ -24,6 +24,7 @@ public class ExecutionContext {
     private final Reader reader;
     private final SearchShardTask task;
     private byte[] fragmentBytes;
+    private AggregateExecutionMode mode = AggregateExecutionMode.DEFAULT;
     private BufferAllocator allocator;
 
     /**
@@ -61,5 +62,15 @@ public class ExecutionContext {
     /** Sets the backend-specific serialized plan fragment bytes. */
     public void setFragmentBytes(byte[] fragmentBytes) {
         this.fragmentBytes = fragmentBytes;
+    }
+
+    /** Returns the aggregation mode: 0=default, 1=partial, 2=final. */
+    public AggregateExecutionMode getMode() {
+        return mode;
+    }
+
+    /** Sets the aggregation mode. */
+    public void setMode(AggregateExecutionMode mode) {
+        this.mode = mode;
     }
 }
