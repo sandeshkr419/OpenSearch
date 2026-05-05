@@ -8,9 +8,13 @@
 
 package org.opensearch.be.datafusion;
 
+import org.apache.arrow.vector.types.FloatingPointPrecision;
 import org.apache.arrow.vector.types.pojo.ArrowType;
+import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.calcite.rel.core.AggregateCall;
+import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
+import org.apache.calcite.sql.type.SqlTypeName;
 import org.opensearch.analytics.spi.AggregateCapability;
 import org.opensearch.analytics.spi.AggregateFunction;
 import org.opensearch.analytics.spi.AnalyticsSearchBackendPlugin;
@@ -27,6 +31,7 @@ import org.opensearch.analytics.spi.SearchExecEngineProvider;
 import org.opensearch.index.engine.dataformat.DataFormatRegistry;
 
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.UnaryOperator;
@@ -73,6 +78,7 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
         AggregateFunction.MIN,
         AggregateFunction.MAX,
         AggregateFunction.COUNT,
+        AggregateFunction.AVG,
         AggregateFunction.APPROX_COUNT_DISTINCT
     );
 
@@ -131,6 +137,38 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
                     for (FieldType type : SUPPORTED_FIELD_TYPES) {
                         if (func == AggregateFunction.APPROX_COUNT_DISTINCT) {
                             caps.add(AggregateCapability.approximate(func, Set.of(type), formats, ArrowType.Binary.INSTANCE));
+                        } else if (func == AggregateFunction.AVG) {
+                            caps.add(
+                                AggregateCapability.withIntermediateFields(
+                                    func,
+                                    Set.of(type),
+                                    formats,
+                                    List.of(
+                                        new Field(
+                                            "[count]",
+                                            new org.apache.arrow.vector.types.pojo.FieldType(false, new ArrowType.Int(64, true), null),
+                                            null
+                                        ),
+                                        new Field(
+                                            "[sum]",
+                                            new org.apache.arrow.vector.types.pojo.FieldType(
+                                                false,
+                                                new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE),
+                                                null
+                                            ),
+                                            null
+                                        )
+                                    ),
+                                    (rb, refs) -> {
+                                        RelDataType dbl = rb.getTypeFactory().createSqlType(SqlTypeName.DOUBLE);
+                                        return rb.makeCall(
+                                            SqlStdOperatorTable.DIVIDE,
+                                            rb.makeCast(dbl, refs.get(1)),
+                                            rb.makeCast(dbl, refs.get(0))
+                                        );
+                                    }
+                                )
+                            );
                         } else {
                             caps.add(AggregateCapability.simple(func, Set.of(type), formats));
                         }

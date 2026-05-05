@@ -11,6 +11,7 @@ package org.opensearch.analytics.planner.dag;
 import org.apache.calcite.rel.RelNode;
 import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.opensearch.analytics.planner.CapabilityRegistry;
+import org.opensearch.analytics.planner.RegistryAware;
 import org.opensearch.analytics.planner.rel.AggregateMode;
 import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
 import org.opensearch.analytics.planner.rel.OpenSearchExchangeReducer;
@@ -66,6 +67,9 @@ public class FragmentConversionDriver {
         for (StagePlan plan : stage.getPlanAlternatives()) {
             AnalyticsSearchBackendPlugin backend = registry.getBackend(plan.backendId());
             FragmentConvertor convertor = backend.getFragmentConvertor();
+            if (convertor instanceof RegistryAware ra) {
+                ra.setRegistry(registry, plan.backendId());
+            }
             byte[] bytes = convert(plan.resolvedFragment(), convertor);
             AggregateExecutionMode mode = (plan.resolvedFragment() instanceof OpenSearchAggregate agg
                 && agg.getMode() == AggregateMode.PARTIAL) ? AggregateExecutionMode.PARTIAL : AggregateExecutionMode.DEFAULT;

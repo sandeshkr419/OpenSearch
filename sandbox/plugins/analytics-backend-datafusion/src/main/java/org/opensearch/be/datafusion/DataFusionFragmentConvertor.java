@@ -9,11 +9,15 @@
 package org.opensearch.be.datafusion;
 
 import com.google.protobuf.InvalidProtocolBufferException;
+import org.apache.arrow.vector.types.pojo.ArrowType;
+import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.calcite.linq4j.tree.Expression;
 import org.apache.calcite.plan.RelOptCluster;
 import org.apache.calcite.plan.RelOptSchema;
 import org.apache.calcite.plan.RelOptTable;
 import org.apache.calcite.plan.RelTraitSet;
 import org.apache.calcite.rel.RelCollation;
+import org.apache.calcite.rel.RelCollations;
 import org.apache.calcite.rel.RelDistribution;
 import org.apache.calcite.rel.RelDistributions;
 import org.apache.calcite.rel.RelNode;
@@ -21,27 +25,35 @@ import org.apache.calcite.rel.RelReferentialConstraint;
 import org.apache.calcite.rel.RelRoot;
 import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.rel.core.TableScan;
+import org.apache.calcite.rel.logical.LogicalAggregate;
+import org.apache.calcite.rel.logical.LogicalProject;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rel.type.RelDataTypeField;
+import org.apache.calcite.rex.RexBuilder;
+import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.schema.ColumnStrategy;
 import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.opensearch.analytics.planner.CapabilityRegistry;
+import org.opensearch.analytics.planner.RegistryAware;
 import org.opensearch.analytics.planner.rel.OpenSearchStageInputScan;
+import org.opensearch.analytics.spi.AggregateFunction;
 import org.opensearch.analytics.spi.DelegatedPredicateFunction;
 import org.opensearch.analytics.spi.FragmentConvertor;
+import org.opensearch.common.Nullable;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
+import java.util.function.BiFunction;
 
 import io.substrait.extension.SimpleExtension;
+import io.substrait.isthmus.AggregateFunctions;
 import io.substrait.isthmus.ImmutableFeatureBoard;
 import io.substrait.isthmus.SubstraitRelVisitor;
 import io.substrait.isthmus.TypeConverter;
@@ -78,7 +90,7 @@ import io.substrait.util.EmptyVisitationContext;
  *
  * @opensearch.internal
  */
-public class DataFusionFragmentConvertor implements FragmentConvertor {
+public class DataFusionFragmentConvertor implements FragmentConvertor, RegistryAware {
 
     private static final Logger LOGGER = LogManager.getLogger(DataFusionFragmentConvertor.class);
 
@@ -88,9 +100,19 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
     );
 
     private final SimpleExtension.ExtensionCollection extensions;
+    @Nullable
+    private CapabilityRegistry capabilityRegistry;
+    @Nullable
+    private String backendId;
 
     public DataFusionFragmentConvertor(SimpleExtension.ExtensionCollection extensions) {
         this.extensions = extensions;
+    }
+
+    @Override
+    public void setRegistry(CapabilityRegistry registry, String backendId) {
+        this.capabilityRegistry = registry;
+        this.backendId = backendId;
     }
 
     @Override
@@ -117,10 +139,155 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
     }
 
     /**
-     * Substrait function name → DataFusion function name remappings.
-     * Isthmus uses Substrait spec names; DataFusion may use different names.
+     * Rewrites the {@link OpenSearchStageInputScan} row type so its fields match the
+     * actual partial-state schema emitted by the backend. For each aggregate call that
+     * has {@code intermediateFields} declared in its capability, the single Calcite
+     * output field is replaced by the declared partial-state fields
+     * (e.g. AVG → count + sum, approx_distinct → hll_registers).
      */
-    private static final Map<String, String> FUNCTION_RENAMES = Map.of("approx_count_distinct", "approx_distinct");
+    private RelNode fixIntermediateInputTypes(RelNode node) {
+        if (!(node instanceof org.apache.calcite.rel.core.Aggregate agg)) {
+            if (node.getInputs().size() == 1) return node.copy(
+                node.getTraitSet(),
+                List.of(fixIntermediateInputTypes(node.getInputs().get(0)))
+            );
+            return node;
+        }
+        RelNode child = agg.getInput();
+        if (!(child instanceof OpenSearchStageInputScan scan)) return node;
+
+        RelDataTypeFactory typeFactory = scan.getCluster().getTypeFactory();
+        RexBuilder rexBuilder = agg.getCluster().getRexBuilder();
+        int groupCount = agg.getGroupSet().cardinality();
+
+        List<String> scanNames = new ArrayList<>();
+        List<RelDataType> scanTypes = new ArrayList<>();
+        for (int i = 0; i < groupCount; i++) {
+            RelDataTypeField f = scan.getRowType().getFieldList().get(i);
+            scanNames.add(f.getName());
+            scanTypes.add(f.getType());
+        }
+
+        List<Integer> partialStart = new ArrayList<>();
+        List<BiFunction<RexBuilder, List<RexNode>, RexNode>> finalExprs = new ArrayList<>();
+        boolean needsRewrite = false;
+
+        for (int i = 0; i < agg.getAggCallList().size(); i++) {
+            AggregateCall call = agg.getAggCallList().get(i);
+            RelDataTypeField f = scan.getRowType().getFieldList().get(groupCount + i);
+            List<Field> iFields = resolveIntermediateFields(call);
+            partialStart.add(scanNames.size());
+            if (iFields != null) {
+                needsRewrite = true;
+                for (Field iField : iFields) {
+                    String suffix = iField.getName();
+                    scanNames.add(suffix.isEmpty() ? f.getName() : f.getName() + suffix);
+                    scanTypes.add(arrowTypeToCalcite(iField.getFieldType().getType(), typeFactory));
+                }
+                finalExprs.add(resolveFinalExpression(call));
+            } else {
+                scanNames.add(f.getName());
+                scanTypes.add(f.getType());
+                finalExprs.add(null);
+            }
+        }
+        if (!needsRewrite) return node;
+
+        OpenSearchStageInputScan newScan = scan.withRowType(typeFactory.createStructType(scanTypes, scanNames));
+
+        List<AggregateCall> newAggCalls = new ArrayList<>();
+        for (int i = 0; i < agg.getAggCallList().size(); i++) {
+            AggregateCall call = agg.getAggCallList().get(i);
+            List<Field> iFields = resolveIntermediateFields(call);
+            int start = partialStart.get(i);
+            var finalExpr = finalExprs.get(i);
+            if (iFields != null && finalExpr != null) {
+                for (int j = 0; j < iFields.size(); j++) {
+                    RelDataType colType = typeFactory.createTypeWithNullability(scanTypes.get(start + j), true);
+                    newAggCalls.add(
+                        AggregateCall.create(
+                            AggregateFunctions.SUM,
+                            false,
+                            false,
+                            false,
+                            List.of(),
+                            List.of(start + j),
+                            -1,
+                            null,
+                            RelCollations.EMPTY,
+                            colType,
+                            scanNames.get(start + j)
+                        )
+                    );
+                }
+            } else {
+                newAggCalls.add(call.adaptTo(newScan, List.of(start), call.filterArg, groupCount, agg.getGroupCount()));
+            }
+        }
+
+        LogicalAggregate newAgg = new LogicalAggregate(
+            agg.getCluster(),
+            agg.getTraitSet(),
+            agg.getHints(),
+            newScan,
+            agg.getGroupSet(),
+            agg.getGroupSets(),
+            newAggCalls
+        );
+
+        boolean needsProject = finalExprs.stream().anyMatch(e -> e != null);
+        if (!needsProject) return newAgg;
+
+        List<RexNode> projectExprs = new ArrayList<>();
+        List<String> projectNames = new ArrayList<>();
+        for (int i = 0; i < groupCount; i++) {
+            projectExprs.add(rexBuilder.makeInputRef(newAgg, i));
+            projectNames.add(newAgg.getRowType().getFieldList().get(i).getName());
+        }
+        int aggColIdx = groupCount;
+        for (int i = 0; i < agg.getAggCallList().size(); i++) {
+            AggregateCall origCall = agg.getAggCallList().get(i);
+            List<Field> iFields = resolveIntermediateFields(origCall);
+            var finalExpr = finalExprs.get(i);
+            if (iFields != null && finalExpr != null) {
+                List<RexNode> partialRefs = new ArrayList<>();
+                for (int j = 0; j < iFields.size(); j++) {
+                    partialRefs.add(rexBuilder.makeInputRef(newAgg, aggColIdx + j));
+                }
+                projectExprs.add(finalExpr.apply(rexBuilder, partialRefs));
+                aggColIdx += iFields.size();
+            } else {
+                projectExprs.add(rexBuilder.makeInputRef(newAgg, aggColIdx));
+                aggColIdx += 1;
+            }
+            projectNames.add(origCall.name != null ? origCall.name : agg.getRowType().getFieldList().get(groupCount + i).getName());
+        }
+        RelDataType projectRowType = typeFactory.createStructType(projectExprs.stream().map(RexNode::getType).toList(), projectNames);
+        return new LogicalProject(agg.getCluster(), agg.getTraitSet(), List.of(), newAgg, projectExprs, projectRowType);
+    }
+
+    private List<Field> resolveIntermediateFields(AggregateCall call) {
+        if (capabilityRegistry == null || backendId == null) return null;
+        AggregateFunction func = AggregateFunction.fromAggregateCall(call);
+        if (func == null) return null;
+        return capabilityRegistry.getIntermediateFields(backendId, func);
+    }
+
+    private BiFunction<RexBuilder, List<RexNode>, RexNode> resolveFinalExpression(AggregateCall call) {
+        if (capabilityRegistry == null || backendId == null) return null;
+        AggregateFunction func = AggregateFunction.fromAggregateCall(call);
+        if (func == null) return null;
+        return capabilityRegistry.getFinalExpression(backendId, func);
+    }
+
+    private static RelDataType arrowTypeToCalcite(ArrowType arrowType, RelDataTypeFactory f) {
+        return switch (arrowType) {
+            case ArrowType.Int i when i.getBitWidth() == 64 -> f.createSqlType(SqlTypeName.BIGINT);
+            case ArrowType.FloatingPoint fp -> f.createSqlType(SqlTypeName.DOUBLE);
+            case ArrowType.Binary b -> f.createSqlType(SqlTypeName.VARBINARY, Integer.MAX_VALUE);
+            default -> f.createSqlType(SqlTypeName.VARBINARY, Integer.MAX_VALUE);
+        };
+    }
 
     @Override
     public byte[] attachFragmentOnTop(RelNode fragment, byte[] innerBytes) {
@@ -141,6 +308,8 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
     }
 
     // ── Core conversion helpers ─────────────────────────────────────────────────
+
+    private static final Map<String, String> FUNCTION_RENAMES = Map.of("approx_count_distinct", "approx_distinct");
 
     private byte[] convertToSubstrait(RelNode fragment) {
         RelRoot root = RelRoot.of(fragment, SqlKind.SELECT);
@@ -255,43 +424,6 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
      * differs from the Calcite-declared return type. This ensures the Substrait
      * {@code NamedScan} schema matches the actual streaming table schema.
      */
-    private static RelNode fixIntermediateInputTypes(RelNode node) {
-        if (!(node instanceof org.apache.calcite.rel.core.Aggregate agg)) {
-            return node;
-        }
-        // Find approx_count_distinct positions in the aggregate call list
-        Set<Integer> approxPositions = new HashSet<>();
-        int groupCount = agg.getGroupSet().cardinality();
-        for (int i = 0; i < agg.getAggCallList().size(); i++) {
-            AggregateCall call = agg.getAggCallList().get(i);
-            if (call.getAggregation().getKind() == SqlKind.COUNT && call.isApproximate()) {
-                approxPositions.add(groupCount + i);
-            }
-        }
-        if (approxPositions.isEmpty()) return node;
-
-        // Rewrite the child (StageInputScan) row type
-        RelNode child = agg.getInput();
-        if (!(child instanceof OpenSearchStageInputScan scan)) return node;
-
-        RelDataTypeFactory typeFactory = scan.getCluster().getTypeFactory();
-        RelDataType origType = scan.getRowType();
-        List<RelDataTypeField> fields = origType.getFieldList();
-        List<String> names = new ArrayList<>();
-        List<RelDataType> types = new ArrayList<>();
-        for (int i = 0; i < fields.size(); i++) {
-            names.add(fields.get(i).getName());
-            if (approxPositions.contains(i)) {
-                types.add(typeFactory.createSqlType(SqlTypeName.VARBINARY, Integer.MAX_VALUE));
-            } else {
-                types.add(fields.get(i).getType());
-            }
-        }
-        RelDataType newRowType = typeFactory.createStructType(types, names);
-        OpenSearchStageInputScan newScan = scan.withRowType(newRowType);
-        return agg.copy(agg.getTraitSet(), List.of(newScan));
-    }
-
     private static RelNode rewriteStageInputScans(RelNode node) {
         if (node instanceof OpenSearchStageInputScan scan) {
             return new StageInputTableScan(scan.getCluster(), scan.getTraitSet(), DatafusionReduceSink.INPUT_ID, scan.getRowType());
@@ -317,7 +449,16 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         RelDataTypeFactory typeFactory = relNode.getCluster().getTypeFactory();
         TypeConverter typeConverter = TypeConverter.DEFAULT;
 
-        AggregateFunctionConverter aggConverter = new AggregateFunctionConverter(extensions.aggregateFunctions(), typeFactory);
+        AggregateFunctionConverter aggConverter = new AggregateFunctionConverter(extensions.aggregateFunctions(), typeFactory) {
+            @Override
+            protected FunctionFinder getFunctionFinder(AggregateCall call) {
+                FunctionFinder finder = super.getFunctionFinder(call);
+                if (finder == null && call.getAggregation().getKind() == SqlKind.AVG) {
+                    finder = signatures.get(AggregateFunctions.AVG);
+                }
+                return finder;
+            }
+        };
         ScalarFunctionConverter scalarConverter = new ScalarFunctionConverter(
             extensions.scalarFunctions(),
             ADDITIONAL_SCALAR_SIGS,
@@ -499,7 +640,7 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
 
         @Override
         @SuppressWarnings("rawtypes")
-        public org.apache.calcite.linq4j.tree.Expression getExpression(Class clazz) {
+        public Expression getExpression(Class clazz) {
             return null;
         }
 

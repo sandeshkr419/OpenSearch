@@ -15,12 +15,12 @@
 //! [`RecordBatchStream`] and is wrapped in a [`SingleReceiverPartition`] so it
 //! can be registered on a `SessionContext` as a `StreamingTable`.
 //!
-//! # Backpressure
+//! # Channel
 //!
-//! The underlying mpsc is bounded (capacity 4) — chosen small so the sender
-//! back-pressures when the DataFusion execute side falls behind. Under load the
-//! Java feeder thread blocks on `send_blocking`, which naturally stalls the
-//! shard response pipeline.
+//! The underlying mpsc is unbounded — `send_blocking` never blocks, which avoids
+//! a deadlock where the coordinator's `Single`-mode aggregate waits for all input
+//! before producing output while the Java feeder thread waits for the coordinator
+//! to read before sending the next batch.
 //!
 //! # Single-consumer contract
 //!
@@ -46,41 +46,28 @@ use futures::{stream, Stream};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
-/// Bounded channel capacity. Small by design — producers back-pressure when the
-/// DataFusion execute side falls behind.
-const CHANNEL_CAPACITY: usize = 4;
-
 /// Producer side of a partition stream.
 ///
 /// Owned by the FFM bridge via `Box::into_raw`; dropping the sender (e.g. via
 /// `df_sender_close`) closes the channel, which signals EOF to the DataFusion
 /// receiver side.
 pub struct PartitionStreamSender {
-    tx: mpsc::Sender<Result<RecordBatch, DataFusionError>>,
+    tx: mpsc::UnboundedSender<Result<RecordBatch, DataFusionError>>,
     schema: SchemaRef,
 }
 
 impl PartitionStreamSender {
-    /// Returns the schema this sender was created with.
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
     }
 
-    /// Push a batch into the channel from a synchronous (non-async) context.
-    ///
-    /// The provided `handle` is used to drive the async send — typically the
-    /// `io_runtime` handle from the global `RuntimeManager`. This lets the FFM
-    /// bridge push without being async itself and without requiring the calling
-    /// thread to be a Tokio worker.
-    ///
-    /// Blocks while the channel is full (natural backpressure). Returns an
-    /// error only if the receiver has been dropped.
+    /// Push a batch into the channel. Never blocks — the channel is unbounded.
     pub fn send_blocking(
         &self,
         batch: Result<RecordBatch, DataFusionError>,
-        handle: &Handle,
+        _handle: &Handle,
     ) -> Result<(), DataFusionError> {
-        handle.block_on(self.tx.send(batch)).map_err(|_| {
+        self.tx.send(batch).map_err(|_| {
             DataFusionError::Execution(
                 "partition stream receiver dropped before send".to_string(),
             )
@@ -102,7 +89,7 @@ impl fmt::Debug for PartitionStreamSender {
 /// directly. Typically handed to [`SingleReceiverPartition`] and registered on
 /// a `SessionContext` as a `StreamingTable`.
 pub struct PartitionStreamReceiver {
-    rx: mpsc::Receiver<Result<RecordBatch, DataFusionError>>,
+    rx: mpsc::UnboundedReceiver<Result<RecordBatch, DataFusionError>>,
     schema: SchemaRef,
 }
 
@@ -128,14 +115,13 @@ impl RecordBatchStream for PartitionStreamReceiver {
     }
 }
 
-/// Creates a paired sender/receiver over a bounded mpsc (capacity
-/// [`CHANNEL_CAPACITY`]).
+/// Creates a paired sender/receiver over an unbounded mpsc.
 ///
 /// Both halves share the provided [`SchemaRef`]. Dropping the sender closes the
 /// channel — the receiver's `poll_next` then yields `Ready(None)` once any
 /// buffered batches are drained, which DataFusion interprets as end-of-input.
 pub fn channel(schema: SchemaRef) -> (PartitionStreamSender, PartitionStreamReceiver) {
-    let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
+    let (tx, rx) = mpsc::unbounded_channel();
     let sender = PartitionStreamSender {
         tx,
         schema: Arc::clone(&schema),

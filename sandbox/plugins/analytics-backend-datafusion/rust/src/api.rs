@@ -667,14 +667,9 @@ pub unsafe fn sender_send(
 ) -> Result<(), DataFusionError> {
     let sender = &*(sender_ptr as *const PartitionStreamSender);
 
-    // Take ownership of the Java-allocated FFI structs. `from_raw` reads
-    // the struct contents into Rust-owned values; the original memory is
-    // now Rust's responsibility to drop.
     let ffi_array = FFI_ArrowArray::from_raw(array_ptr as *mut FFI_ArrowArray);
     let ffi_schema = FFI_ArrowSchema::from_raw(schema_ptr as *mut FFI_ArrowSchema);
 
-    // `from_ffi` takes the array by value (consumes it) and the schema by
-    // reference (it is still dropped when `ffi_schema` goes out of scope).
     let array_data = arrow_array::ffi::from_ffi(ffi_array, &ffi_schema).map_err(|e| {
         DataFusionError::Execution(format!("Failed to import Arrow C Data array: {}", e))
     })?;

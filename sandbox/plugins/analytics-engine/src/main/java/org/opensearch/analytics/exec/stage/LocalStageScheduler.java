@@ -8,9 +8,7 @@
 
 package org.opensearch.analytics.exec.stage;
 
-import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
-import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Aggregate;
@@ -109,7 +107,7 @@ final class LocalStageScheduler implements StageScheduler {
             return ArrowSchemaFromCalcite.arrowSchemaFromRowType(childFragment.getRowType());
         }
 
-        // Determine the backend for this child stage to look up decompositions
+        // Determine the backend for this child stage to look up intermediate field declarations
         String backendId = child.getPlanAlternatives().isEmpty() ? null : child.getPlanAlternatives().getFirst().backendId();
 
         List<Field> fields = new ArrayList<>();
@@ -121,9 +119,12 @@ final class LocalStageScheduler implements StageScheduler {
         for (int i = 0; i < agg.getAggCallList().size(); i++) {
             AggregateCall call = agg.getAggCallList().get(i);
             RelDataTypeField f = childFragment.getRowType().getFieldList().get(groupCount + i);
-            ArrowType overrideType = resolveIntermediateArrowType(call, backendId, capabilityRegistry);
-            if (overrideType != null) {
-                fields.add(new Field(f.getName(), new FieldType(true, overrideType, null), null));
+            List<Field> intermediateFields = resolveIntermediateFields(call, backendId, capabilityRegistry);
+            if (intermediateFields != null) {
+                for (Field iField : intermediateFields) {
+                    String fieldName = iField.getName().isEmpty() ? f.getName() : f.getName() + iField.getName();
+                    fields.add(new Field(fieldName, iField.getFieldType(), null));
+                }
             } else {
                 fields.add(ArrowSchemaFromCalcite.fieldFromCalcite(f));
             }
@@ -131,15 +132,11 @@ final class LocalStageScheduler implements StageScheduler {
         return new Schema(fields);
     }
 
-    /**
-     * Returns the intermediate Arrow type for a partial aggregate call if the
-     * backend's decomposition declares one, or {@code null} to use the Calcite type.
-     */
-    private static ArrowType resolveIntermediateArrowType(AggregateCall call, String backendId, CapabilityRegistry registry) {
+    private static List<Field> resolveIntermediateFields(AggregateCall call, String backendId, CapabilityRegistry registry) {
         if (backendId == null) return null;
         AggregateFunction func = AggregateFunction.fromAggregateCall(call);
         if (func == null) return null;
-        return registry.getIntermediateArrowType(backendId, func);
+        return registry.getIntermediateFields(backendId, func);
     }
 
     private static Aggregate findAggregate(RelNode node) {

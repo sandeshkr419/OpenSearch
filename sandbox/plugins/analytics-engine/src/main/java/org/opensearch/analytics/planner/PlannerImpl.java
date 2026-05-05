@@ -19,13 +19,10 @@ import org.apache.calcite.plan.hep.HepProgramBuilder;
 import org.apache.calcite.plan.volcano.AbstractConverter;
 import org.apache.calcite.plan.volcano.VolcanoPlanner;
 import org.apache.calcite.rel.RelNode;
-import org.apache.calcite.rel.core.Aggregate;
 import org.apache.calcite.rel.core.Filter;
 import org.apache.calcite.rel.core.Project;
 import org.apache.calcite.rel.metadata.RelMetadataQuery;
-import org.apache.calcite.rel.rules.AggregateReduceFunctionsRule;
 import org.apache.calcite.rel.rules.ReduceExpressionsRule;
-import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.tools.RelBuilder;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -37,7 +34,6 @@ import org.opensearch.analytics.planner.rules.OpenSearchProjectRule;
 import org.opensearch.analytics.planner.rules.OpenSearchSortRule;
 import org.opensearch.analytics.planner.rules.OpenSearchTableScanRule;
 
-import java.util.EnumSet;
 import java.util.List;
 
 /**
@@ -86,10 +82,7 @@ public class PlannerImpl {
         hepBuilder.addRuleCollection(
             List.of(
                 new ReduceExpressionsRule.FilterReduceExpressionsRule(Filter.class, RelBuilder.proto(Contexts.empty())),
-                new ReduceExpressionsRule.ProjectReduceExpressionsRule(Project.class, RelBuilder.proto(Contexts.empty())),
-                // Rewrite AVG → SUM/COUNT + Project before marking so backends receive
-                // only primitive aggregates (SUM, COUNT) that they natively support.
-                new AggregateReduceFunctionsRule(Aggregate.class, RelBuilder.proto(Contexts.empty()), EnumSet.of(SqlKind.AVG))
+                new ReduceExpressionsRule.ProjectReduceExpressionsRule(Project.class, RelBuilder.proto(Contexts.empty()))
             )
         );
 

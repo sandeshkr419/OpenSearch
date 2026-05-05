@@ -8,7 +8,9 @@
 
 package org.opensearch.analytics.planner;
 
-import org.apache.arrow.vector.types.pojo.ArrowType;
+import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.calcite.rex.RexBuilder;
+import org.apache.calcite.rex.RexNode;
 import org.opensearch.analytics.spi.AggregateCapability;
 import org.opensearch.analytics.spi.AggregateDecomposition;
 import org.opensearch.analytics.spi.AggregateFunction;
@@ -31,6 +33,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /**
@@ -78,8 +81,10 @@ public class CapabilityRegistry {
 
     // Decomposition index: (backendName, AggregateFunction) → AggregateDecomposition
     private final Map<DecompositionKey, AggregateDecomposition> decompositionIndex = new HashMap<>();
-    // Intermediate Arrow type index: (backendName, AggregateFunction) → ArrowType
-    private final Map<DecompositionKey, ArrowType> intermediateArrowTypeIndex = new HashMap<>();
+    // Intermediate fields index: (backendName, AggregateFunction) → partial state fields
+    private final Map<DecompositionKey, List<Field>> intermediateFieldsIndex = new HashMap<>();
+    // Final expression index: (backendName, AggregateFunction) → final combination expression builder
+    private final Map<DecompositionKey, BiFunction<RexBuilder, List<RexNode>, RexNode>> finalExpressionIndex = new HashMap<>();
 
     private final Function<IndexMetadata, FieldStorageResolver> fieldStorageFactory;
 
@@ -143,8 +148,11 @@ public class CapabilityRegistry {
                 if (cap.decomposition() != null) {
                     decompositionIndex.put(new DecompositionKey(name, cap.function()), cap.decomposition());
                 }
-                if (cap.intermediateArrowType() != null) {
-                    intermediateArrowTypeIndex.put(new DecompositionKey(name, cap.function()), cap.intermediateArrowType());
+                if (cap.intermediateFields() != null) {
+                    intermediateFieldsIndex.put(new DecompositionKey(name, cap.function()), cap.intermediateFields());
+                }
+                if (cap.finalExpression() != null) {
+                    finalExpressionIndex.put(new DecompositionKey(name, cap.function()), cap.finalExpression());
                 }
                 aggregateCapableBackends.add(name);
             }
@@ -310,10 +318,15 @@ public class CapabilityRegistry {
         return decompositionIndex.get(new DecompositionKey(backendName, function));
     }
 
-    /** Returns the intermediate Arrow type for the given backend+function, or null if none registered. */
+    /** Returns the intermediate partial-state fields for the given backend+function, or null if none registered. */
     @Nullable
-    public ArrowType getIntermediateArrowType(String backendName, AggregateFunction function) {
-        return intermediateArrowTypeIndex.get(new DecompositionKey(backendName, function));
+    public List<Field> getIntermediateFields(String backendName, AggregateFunction function) {
+        return intermediateFieldsIndex.get(new DecompositionKey(backendName, function));
+    }
+
+    @Nullable
+    public BiFunction<RexBuilder, List<RexNode>, RexNode> getFinalExpression(String backendName, AggregateFunction function) {
+        return finalExpressionIndex.get(new DecompositionKey(backendName, function));
     }
 
     public FieldStorageResolver resolveFieldStorage(IndexMetadata indexMetadata) {

@@ -237,6 +237,18 @@ pub fn force_aggregate_mode(
                     if matches!(agg.mode(), AggregateMode::Final | AggregateMode::FinalPartitioned) {
                         return force_aggregate_mode(Arc::clone(agg.input()), target_mode);
                     }
+                    // Single mode: replace with Partial so the shard emits intermediate state.
+                    if matches!(agg.mode(), AggregateMode::Single | AggregateMode::SinglePartitioned) {
+                        let partial = datafusion::physical_plan::aggregates::AggregateExec::try_new(
+                            AggregateMode::Partial,
+                            agg.group_expr().clone(),
+                            agg.aggr_expr().to_vec(),
+                            agg.filter_expr().to_vec(),
+                            Arc::clone(agg.input()),
+                            agg.input_schema().clone(),
+                        )?;
+                        return Ok(Arc::new(partial));
+                    }
                 }
                 AggregateMode::Final => {
                     // Strip Partial → connect Final directly to Partial's input
@@ -247,6 +259,13 @@ pub fn force_aggregate_mode(
                             );
                             return Ok(plan.with_new_children(vec![coalesced])?);
                         }
+                    }
+                    // Single mode: connect directly to streaming table input.
+                    if matches!(agg.mode(), AggregateMode::Single | AggregateMode::SinglePartitioned) {
+                        let coalesced = Arc::new(
+                            datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec::new(Arc::clone(agg.input()))
+                        );
+                        return Ok(plan.with_new_children(vec![coalesced])?);
                     }
                 }
                 _ => {}
