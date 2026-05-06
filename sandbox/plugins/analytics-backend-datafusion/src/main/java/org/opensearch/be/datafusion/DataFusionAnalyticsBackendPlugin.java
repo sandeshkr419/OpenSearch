@@ -261,7 +261,7 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
                 return Map.of(AggregateFunction.COUNT, call -> {
                     if (!call.isDistinct() || call.isApproximate()) return call;
                     return AggregateCall.create(
-                        SqlStdOperatorTable.APPROX_COUNT_DISTINCT,
+                        DataFusionFragmentConvertor.APPROX_DISTINCT,
                         true,
                         true,
                         call.ignoreNulls(),

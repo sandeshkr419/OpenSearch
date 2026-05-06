@@ -8,15 +8,24 @@
 
 package org.opensearch.analytics.planner.dag;
 
+import org.apache.arrow.vector.types.pojo.ArrowType;
+import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.calcite.rel.RelCollations;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.core.AggregateCall;
+import org.apache.calcite.rel.logical.LogicalAggregate;
+import org.apache.calcite.rel.logical.LogicalProject;
+import org.apache.calcite.rel.type.RelDataTypeFactory;
+import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.sql.SqlFunction;
+import org.apache.calcite.sql.fun.SqlStdOperatorTable;
+import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.analytics.planner.CapabilityRegistry;
-import org.opensearch.analytics.planner.RegistryAware;
 import org.opensearch.analytics.planner.RelNodeUtils;
 import org.opensearch.analytics.planner.rel.AggregateMode;
 import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
@@ -26,6 +35,7 @@ import org.opensearch.analytics.planner.rel.OpenSearchRelNode;
 import org.opensearch.analytics.planner.rel.OpenSearchStageInputScan;
 import org.opensearch.analytics.planner.rel.OpenSearchTableScan;
 import org.opensearch.analytics.planner.rel.OperatorAnnotation;
+import org.opensearch.analytics.spi.AggregateFunction;
 import org.opensearch.analytics.spi.AnalyticsSearchBackendPlugin;
 import org.opensearch.analytics.spi.DelegatedExpression;
 import org.opensearch.analytics.spi.DelegatedPredicateSerializer;
@@ -39,6 +49,7 @@ import org.opensearch.analytics.spi.ScalarFunction;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /**
@@ -92,9 +103,6 @@ public class FragmentConversionDriver {
         for (StagePlan plan : stage.getPlanAlternatives()) {
             AnalyticsSearchBackendPlugin backend = registry.getBackend(plan.backendId());
             FragmentConvertor convertor = backend.getFragmentConvertor();
-            if (convertor instanceof RegistryAware ra) {
-                ra.setRegistry(registry, plan.backendId());
-            }
 
             // Derive filter tree shape BEFORE stripping (annotations must be intact)
             OpenSearchFilter filter = RelNodeUtils.findNode(plan.resolvedFragment(), OpenSearchFilter.class);
@@ -103,7 +111,7 @@ public class FragmentConversionDriver {
                 : FilterTreeShape.NO_DELEGATION;
 
             IntraOperatorDelegationBytes delegationBytes = new IntraOperatorDelegationBytes(registry);
-            byte[] bytes = convert(plan.resolvedFragment(), convertor, delegationBytes);
+            byte[] bytes = convert(plan.resolvedFragment(), convertor, delegationBytes, registry, plan.backendId());
 
             // Assemble instruction list
             List<InstructionNode> instructions = assembleInstructions(backend, plan, treeShape, delegationBytes);
@@ -214,7 +222,13 @@ public class FragmentConversionDriver {
     /**
      * Dispatches conversion based on the fragment's leaf and top node types.
      */
-    static byte[] convert(RelNode resolvedFragment, FragmentConvertor convertor, IntraOperatorDelegationBytes delegationBytes) {
+    static byte[] convert(
+        RelNode resolvedFragment,
+        FragmentConvertor convertor,
+        IntraOperatorDelegationBytes delegationBytes,
+        CapabilityRegistry registry,
+        String backendId
+    ) {
         RelNode leaf = findLeaf(resolvedFragment);
 
         if (leaf instanceof OpenSearchTableScan scan) {
@@ -235,7 +249,7 @@ public class FragmentConversionDriver {
         }
 
         if (leaf instanceof OpenSearchStageInputScan) {
-            return convertReduceFragment(resolvedFragment, convertor, delegationBytes);
+            return convertReduceFragment(resolvedFragment, convertor, delegationBytes, registry, backendId);
         }
 
         throw new IllegalStateException(
@@ -258,21 +272,30 @@ public class FragmentConversionDriver {
      * when shuffle joins are implemented (check if all inputs are StageInputScan
      * and dispatch to a dedicated convertJoinFragment method).
      */
-    private static byte[] convertReduceFragment(RelNode node, FragmentConvertor convertor, IntraOperatorDelegationBytes delegationBytes) {
-        // Find the ExchangeReducer and collect operators above it
-        return convertReduceNode(node, convertor, false, delegationBytes);
+    private static byte[] convertReduceFragment(
+        RelNode node,
+        FragmentConvertor convertor,
+        IntraOperatorDelegationBytes delegationBytes,
+        CapabilityRegistry registry,
+        String backendId
+    ) {
+        return convertReduceNode(node, convertor, false, delegationBytes, registry, backendId);
     }
 
     private static byte[] convertReduceNode(
         RelNode node,
         FragmentConvertor convertor,
         boolean finalAggConverted,
-        IntraOperatorDelegationBytes delegationBytes
+        IntraOperatorDelegationBytes delegationBytes,
+        CapabilityRegistry registry,
+        String backendId
     ) {
         if (node instanceof OpenSearchExchangeReducer) {
             // Strip ExchangeReducer — StageInputScan below it is the schema source
             // This should never be reached directly; handled by the parent (final agg)
-            return convertor.convertFinalAggFragment(strip(node.getInputs().getFirst(), delegationBytes));
+            return convertor.convertFinalAggFragment(
+                fixIntermediateInputTypes(strip(node.getInputs().getFirst(), delegationBytes), registry, backendId)
+            );
         }
         if (node instanceof OpenSearchRelNode openSearchNode) {
             List<RelNode> strippedInputs = node.getInputs().stream().map(input -> strip(input, delegationBytes)).toList();
@@ -296,12 +319,12 @@ public class FragmentConversionDriver {
                         finalAggInputs.add(strip(input.getInputs().getFirst(), delegationBytes));
                     }
                     RelNode finalAggFragment = openSearchNode.stripAnnotations(finalAggInputs, resolver);
-                    return convertor.convertFinalAggFragment(finalAggFragment);
+                    return convertor.convertFinalAggFragment(fixIntermediateInputTypes(finalAggFragment, registry, backendId));
                 }
             }
 
             // Operator above the final-fragment boundary — convert child first, then attach.
-            byte[] innerBytes = convertReduceNode(node.getInputs().getFirst(), convertor, false, delegationBytes);
+            byte[] innerBytes = convertReduceNode(node.getInputs().getFirst(), convertor, false, delegationBytes, registry, backendId);
             return convertor.attachFragmentOnTop(strippedNode, innerBytes);
         }
         throw new IllegalStateException("Unexpected reduce stage node: " + node.getClass().getSimpleName());
@@ -324,6 +347,146 @@ public class FragmentConversionDriver {
             return openSearchNode.stripAnnotations(strippedChildren, resolver);
         }
         return node;
+    }
+
+    /**
+     * Rewrites the StageInputScan row type to match the actual partial-state schema
+     * for aggregate calls with declared intermediateFields. Also rewrites the aggregate
+     * to SUM the intermediate columns and adds a Project with the finalExpression.
+     */
+    private static RelNode fixIntermediateInputTypes(RelNode node, CapabilityRegistry registry, String backendId) {
+        if (!(node instanceof org.apache.calcite.rel.core.Aggregate agg)) {
+            if (node.getInputs().size() == 1) {
+                return node.copy(node.getTraitSet(), List.of(fixIntermediateInputTypes(node.getInputs().get(0), registry, backendId)));
+            }
+            return node;
+        }
+        RelNode child = agg.getInput();
+        if (!(child instanceof OpenSearchStageInputScan scan)) return node;
+
+        RelDataTypeFactory typeFactory = scan.getCluster().getTypeFactory();
+        RexBuilder rexBuilder = agg.getCluster().getRexBuilder();
+        int groupCount = agg.getGroupSet().cardinality();
+
+        List<String> scanNames = new ArrayList<>();
+        List<org.apache.calcite.rel.type.RelDataType> scanTypes = new ArrayList<>();
+        for (int i = 0; i < groupCount; i++) {
+            RelDataTypeField f = scan.getRowType().getFieldList().get(i);
+            scanNames.add(f.getName());
+            scanTypes.add(f.getType());
+        }
+
+        List<Integer> partialStart = new ArrayList<>();
+        List<BiFunction<RexBuilder, List<RexNode>, RexNode>> finalExprs = new ArrayList<>();
+        boolean needsRewrite = false;
+
+        for (int i = 0; i < agg.getAggCallList().size(); i++) {
+            AggregateCall call = agg.getAggCallList().get(i);
+            RelDataTypeField f = scan.getRowType().getFieldList().get(groupCount + i);
+            AggregateFunction func = AggregateFunction.fromAggregateCall(call);
+            List<Field> iFields = func != null ? registry.getIntermediateFields(backendId, func) : null;
+            partialStart.add(scanNames.size());
+            if (iFields != null) {
+                needsRewrite = true;
+                for (Field iField : iFields) {
+                    String suffix = iField.getName();
+                    scanNames.add(suffix.isEmpty() ? f.getName() : f.getName() + suffix);
+                    scanTypes.add(arrowTypeToCalcite(iField.getFieldType().getType(), typeFactory));
+                }
+                finalExprs.add(registry.getFinalExpression(backendId, func));
+            } else {
+                scanNames.add(f.getName());
+                scanTypes.add(f.getType());
+                finalExprs.add(null);
+            }
+        }
+        if (!needsRewrite) return node;
+
+        var newScan = scan.withRowType(typeFactory.createStructType(scanTypes, scanNames));
+
+        List<AggregateCall> newAggCalls = new ArrayList<>();
+        for (int i = 0; i < agg.getAggCallList().size(); i++) {
+            AggregateCall call = agg.getAggCallList().get(i);
+            AggregateFunction func = AggregateFunction.fromAggregateCall(call);
+            List<Field> iFields = func != null ? registry.getIntermediateFields(backendId, func) : null;
+            int start = partialStart.get(i);
+            if (iFields != null && finalExprs.get(i) != null) {
+                for (int j = 0; j < iFields.size(); j++) {
+                    org.apache.calcite.rel.type.RelDataType colType = typeFactory.createTypeWithNullability(scanTypes.get(start + j), true);
+                    newAggCalls.add(
+                        AggregateCall.create(
+                            SqlStdOperatorTable.SUM,
+                            false,
+                            false,
+                            false,
+                            List.of(),
+                            List.of(start + j),
+                            -1,
+                            null,
+                            RelCollations.EMPTY,
+                            colType,
+                            scanNames.get(start + j)
+                        )
+                    );
+                }
+            } else {
+                newAggCalls.add(call.adaptTo(newScan, List.of(start), call.filterArg, groupCount, agg.getGroupCount()));
+            }
+        }
+
+        LogicalAggregate newAgg = new LogicalAggregate(
+            agg.getCluster(),
+            agg.getTraitSet(),
+            agg.getHints(),
+            newScan,
+            agg.getGroupSet(),
+            agg.getGroupSets(),
+            newAggCalls
+        );
+
+        boolean needsProject = finalExprs.stream().anyMatch(e -> e != null);
+        if (!needsProject) return newAgg;
+
+        List<RexNode> projectExprs = new ArrayList<>();
+        List<String> projectNames = new ArrayList<>();
+        for (int i = 0; i < groupCount; i++) {
+            projectExprs.add(rexBuilder.makeInputRef(newAgg, i));
+            projectNames.add(newAgg.getRowType().getFieldList().get(i).getName());
+        }
+        int aggColIdx = groupCount;
+        for (int i = 0; i < agg.getAggCallList().size(); i++) {
+            AggregateCall origCall = agg.getAggCallList().get(i);
+            AggregateFunction func = AggregateFunction.fromAggregateCall(origCall);
+            List<Field> iFields = func != null ? registry.getIntermediateFields(backendId, func) : null;
+            var finalExpr = finalExprs.get(i);
+            if (iFields != null && finalExpr != null) {
+                List<RexNode> partialRefs = new ArrayList<>();
+                for (int j = 0; j < iFields.size(); j++) {
+                    partialRefs.add(rexBuilder.makeInputRef(newAgg, aggColIdx + j));
+                }
+                projectExprs.add(finalExpr.apply(rexBuilder, partialRefs));
+                aggColIdx += iFields.size();
+            } else {
+                projectExprs.add(rexBuilder.makeInputRef(newAgg, aggColIdx));
+                aggColIdx += 1;
+            }
+            projectNames.add(origCall.name != null ? origCall.name : agg.getRowType().getFieldList().get(groupCount + i).getName());
+        }
+        org.apache.calcite.rel.type.RelDataType projectRowType = typeFactory.createStructType(
+            projectExprs.stream().map(RexNode::getType).toList(),
+            projectNames
+        );
+        return new LogicalProject(agg.getCluster(), agg.getTraitSet(), List.of(), newAgg, projectExprs, projectRowType);
+    }
+
+    private static org.apache.calcite.rel.type.RelDataType arrowTypeToCalcite(ArrowType arrowType, RelDataTypeFactory f) {
+        if (arrowType instanceof ArrowType.Int i && i.getBitWidth() == 64) {
+            return f.createSqlType(SqlTypeName.BIGINT);
+        }
+        if (arrowType instanceof ArrowType.FloatingPoint) {
+            return f.createSqlType(SqlTypeName.DOUBLE);
+        }
+        return f.createSqlType(SqlTypeName.VARBINARY, Integer.MAX_VALUE);
     }
 
     private static RelNode findLeaf(RelNode node) {

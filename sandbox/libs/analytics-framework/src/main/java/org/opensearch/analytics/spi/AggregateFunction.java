@@ -76,19 +76,23 @@ public enum AggregateFunction {
         return null;
     }
 
+    /** Backend-specific operator names that map to a known AggregateFunction. */
+    private static final java.util.Map<String, AggregateFunction> NAME_ALIASES = java.util.Map.of("approx_distinct", APPROX_COUNT_DISTINCT);
+
     /**
-     * Resolves the {@link AggregateFunction} for a Calcite {@link org.apache.calcite.rel.core.AggregateCall},
-     * handling cases where the SqlKind alone is ambiguous (e.g. COUNT vs APPROX_COUNT_DISTINCT).
+     * Resolves the {@link AggregateFunction} for a Calcite {@link org.apache.calcite.rel.core.AggregateCall}.
+     * Checks SqlKind first, then falls back to name matching (enum name or registered alias).
      */
     public static AggregateFunction fromAggregateCall(org.apache.calcite.rel.core.AggregateCall call) {
-        if (call.getAggregation().getKind() == SqlKind.COUNT && call.isApproximate()) {
-            return APPROX_COUNT_DISTINCT;
-        }
         AggregateFunction func = fromSqlKind(call.getAggregation().getKind());
         if (func == null) {
-            try {
-                func = fromNameOrError(call.getAggregation().getName());
-            } catch (IllegalStateException ignored) {}
+            String name = call.getAggregation().getName();
+            func = NAME_ALIASES.get(name.toLowerCase(java.util.Locale.ROOT));
+            if (func == null) {
+                try {
+                    func = fromNameOrError(name);
+                } catch (IllegalStateException ignored) {}
+            }
         }
         return func;
     }
