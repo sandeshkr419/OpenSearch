@@ -287,28 +287,138 @@ public class DataFusionFragmentConvertor implements FragmentConvertor, org.opens
         if (!(child instanceof OpenSearchStageInputScan scan)) return node;
         if (capabilityRegistry == null || backendId == null) return node;
 
-        RelDataTypeFactory tf = scan.getCluster().getTypeFactory();
+        RelDataTypeFactory typeFactory = scan.getCluster().getTypeFactory();
+        org.apache.calcite.rex.RexBuilder rexBuilder = agg.getCluster().getRexBuilder();
         int groupCount = agg.getGroupSet().cardinality();
-        List<RelDataType> fieldTypes = new ArrayList<>(scan.getRowType().getFieldList().stream().map(RelDataTypeField::getType).toList());
+
+        List<String> scanNames = new ArrayList<>();
+        List<RelDataType> scanTypes = new ArrayList<>();
+        for (int i = 0; i < groupCount; i++) {
+            RelDataTypeField f = scan.getRowType().getFieldList().get(i);
+            scanNames.add(f.getName());
+            scanTypes.add(f.getType());
+        }
+
+        List<Integer> partialStart = new ArrayList<>();
+        List<
+            java.util.function.BiFunction<
+                org.apache.calcite.rex.RexBuilder,
+                List<org.apache.calcite.rex.RexNode>,
+                org.apache.calcite.rex.RexNode>> finalExprs = new ArrayList<>();
         boolean needsRewrite = false;
 
         for (int i = 0; i < agg.getAggCallList().size(); i++) {
-            org.opensearch.analytics.spi.AggregateFunction func = org.opensearch.analytics.spi.AggregateFunction.fromAggregateCall(
-                agg.getAggCallList().get(i)
-            );
-            java.util.List<org.apache.arrow.vector.types.pojo.Field> iFields = func != null
+            org.apache.calcite.rel.core.AggregateCall call = agg.getAggCallList().get(i);
+            RelDataTypeField f = scan.getRowType().getFieldList().get(groupCount + i);
+            org.opensearch.analytics.spi.AggregateFunction func = org.opensearch.analytics.spi.AggregateFunction.fromAggregateCall(call);
+            List<org.apache.arrow.vector.types.pojo.Field> iFields = func != null
                 ? capabilityRegistry.getIntermediateFields(backendId, func)
                 : null;
-            if (iFields != null && iFields.size() == 1) {
+            partialStart.add(scanNames.size());
+            if (iFields != null) {
                 needsRewrite = true;
-                fieldTypes.set(groupCount + i, arrowTypeToCalcite(iFields.get(0).getFieldType().getType(), tf));
+                for (org.apache.arrow.vector.types.pojo.Field iField : iFields) {
+                    String suffix = iField.getName();
+                    scanNames.add(suffix.isEmpty() ? f.getName() : f.getName() + suffix);
+                    scanTypes.add(arrowTypeToCalcite(iField.getFieldType().getType(), typeFactory));
+                }
+                finalExprs.add(capabilityRegistry.getFinalExpression(backendId, func));
+            } else {
+                scanNames.add(f.getName());
+                scanTypes.add(f.getType());
+                finalExprs.add(null);
             }
         }
         if (!needsRewrite) return node;
 
-        List<String> names = scan.getRowType().getFieldList().stream().map(RelDataTypeField::getName).toList();
-        OpenSearchStageInputScan newScan = scan.withRowType(tf.createStructType(fieldTypes, names));
-        return agg.copy(agg.getTraitSet(), List.of(newScan));
+        OpenSearchStageInputScan newScan = scan.withRowType(typeFactory.createStructType(scanTypes, scanNames));
+
+        List<org.apache.calcite.rel.core.AggregateCall> newAggCalls = new ArrayList<>();
+        for (int i = 0; i < agg.getAggCallList().size(); i++) {
+            org.apache.calcite.rel.core.AggregateCall call = agg.getAggCallList().get(i);
+            org.opensearch.analytics.spi.AggregateFunction func = org.opensearch.analytics.spi.AggregateFunction.fromAggregateCall(call);
+            List<org.apache.arrow.vector.types.pojo.Field> iFields = func != null
+                ? capabilityRegistry.getIntermediateFields(backendId, func)
+                : null;
+            int start = partialStart.get(i);
+            if (iFields != null && finalExprs.get(i) != null) {
+                for (int j = 0; j < iFields.size(); j++) {
+                    RelDataType colType = typeFactory.createTypeWithNullability(scanTypes.get(start + j), true);
+                    newAggCalls.add(
+                        org.apache.calcite.rel.core.AggregateCall.create(
+                            io.substrait.isthmus.AggregateFunctions.SUM,
+                            false,
+                            false,
+                            false,
+                            List.of(),
+                            List.of(start + j),
+                            -1,
+                            null,
+                            org.apache.calcite.rel.RelCollations.EMPTY,
+                            colType,
+                            scanNames.get(start + j)
+                        )
+                    );
+                }
+            } else {
+                newAggCalls.add(call.adaptTo(newScan, List.of(start), call.filterArg, groupCount, agg.getGroupCount()));
+            }
+        }
+
+        org.apache.calcite.rel.logical.LogicalAggregate newAgg = new org.apache.calcite.rel.logical.LogicalAggregate(
+            agg.getCluster(),
+            agg.getTraitSet(),
+            agg.getHints(),
+            newScan,
+            agg.getGroupSet(),
+            agg.getGroupSets(),
+            newAggCalls
+        );
+
+        boolean needsProject = finalExprs.stream().anyMatch(e -> e != null);
+        if (!needsProject) return newAgg;
+
+        List<org.apache.calcite.rex.RexNode> projectExprs = new ArrayList<>();
+        List<String> projectNames = new ArrayList<>();
+        for (int i = 0; i < groupCount; i++) {
+            projectExprs.add(rexBuilder.makeInputRef(newAgg, i));
+            projectNames.add(newAgg.getRowType().getFieldList().get(i).getName());
+        }
+        int aggColIdx = groupCount;
+        for (int i = 0; i < agg.getAggCallList().size(); i++) {
+            org.apache.calcite.rel.core.AggregateCall origCall = agg.getAggCallList().get(i);
+            org.opensearch.analytics.spi.AggregateFunction func = org.opensearch.analytics.spi.AggregateFunction.fromAggregateCall(
+                origCall
+            );
+            List<org.apache.arrow.vector.types.pojo.Field> iFields = func != null
+                ? capabilityRegistry.getIntermediateFields(backendId, func)
+                : null;
+            var finalExpr = finalExprs.get(i);
+            if (iFields != null && finalExpr != null) {
+                List<org.apache.calcite.rex.RexNode> partialRefs = new ArrayList<>();
+                for (int j = 0; j < iFields.size(); j++) {
+                    partialRefs.add(rexBuilder.makeInputRef(newAgg, aggColIdx + j));
+                }
+                projectExprs.add(finalExpr.apply(rexBuilder, partialRefs));
+                aggColIdx += iFields.size();
+            } else {
+                projectExprs.add(rexBuilder.makeInputRef(newAgg, aggColIdx));
+                aggColIdx += 1;
+            }
+            projectNames.add(origCall.name != null ? origCall.name : agg.getRowType().getFieldList().get(groupCount + i).getName());
+        }
+        RelDataType projectRowType = typeFactory.createStructType(
+            projectExprs.stream().map(org.apache.calcite.rex.RexNode::getType).toList(),
+            projectNames
+        );
+        return new org.apache.calcite.rel.logical.LogicalProject(
+            agg.getCluster(),
+            agg.getTraitSet(),
+            List.of(),
+            newAgg,
+            projectExprs,
+            projectRowType
+        );
     }
 
     private static RelDataType arrowTypeToCalcite(org.apache.arrow.vector.types.pojo.ArrowType arrowType, RelDataTypeFactory f) {

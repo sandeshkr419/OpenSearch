@@ -9,18 +9,11 @@
 package org.opensearch.be.datafusion;
 
 import org.apache.arrow.vector.types.pojo.ArrowType;
-import org.apache.calcite.rel.RelCollations;
-import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.rel.type.RelDataType;
-import org.apache.calcite.rel.type.RelDataTypeFactory;
-import org.apache.calcite.rex.RexBuilder;
-import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
-import org.apache.calcite.sql.type.SqlTypeFamily;
 import org.apache.calcite.sql.type.SqlTypeName;
 import org.opensearch.analytics.spi.AggregateCapability;
-import org.opensearch.analytics.spi.AggregateDecomposition;
 import org.opensearch.analytics.spi.AggregateFunction;
 import org.opensearch.analytics.spi.AnalyticsSearchBackendPlugin;
 import org.opensearch.analytics.spi.BackendCapabilityProvider;
@@ -157,61 +150,37 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
                         if (func == AggregateFunction.APPROX_COUNT_DISTINCT) {
                             caps.add(AggregateCapability.approximate(func, Set.of(type), formats, ArrowType.Binary.INSTANCE));
                         } else if (func == AggregateFunction.AVG) {
-                            AggregateDecomposition avgDecomp = new AggregateDecomposition() {
-                                @Override
-                                public List<AggregateCall> partialCalls(AggregateCall originalCall, RelNode input) {
-                                    RelDataTypeFactory tf = input.getCluster().getTypeFactory();
-                                    RelDataType countType = tf.createSqlType(SqlTypeName.BIGINT);
-                                    // SUM type: BIGINT for integer inputs, DOUBLE for floating point
-                                    RelDataType inputFieldType = input.getRowType()
-                                        .getFieldList()
-                                        .get(originalCall.getArgList().get(0))
-                                        .getType();
-                                    SqlTypeName sumTypeName = SqlTypeFamily.INTEGER.getTypeNames().contains(inputFieldType.getSqlTypeName())
-                                        ? SqlTypeName.BIGINT
-                                        : SqlTypeName.DOUBLE;
-                                    RelDataType sumType = tf.createTypeWithNullability(tf.createSqlType(sumTypeName), true);
-                                    return List.of(
-                                        AggregateCall.create(
-                                            SqlStdOperatorTable.COUNT,
-                                            false,
-                                            false,
-                                            false,
-                                            List.of(),
-                                            originalCall.getArgList(),
-                                            -1,
-                                            null,
-                                            RelCollations.EMPTY,
-                                            countType,
-                                            "count"
+                            caps.add(
+                                AggregateCapability.withIntermediateFields(
+                                    func,
+                                    Set.of(type),
+                                    formats,
+                                    List.of(
+                                        new org.apache.arrow.vector.types.pojo.Field(
+                                            "[count]",
+                                            new org.apache.arrow.vector.types.pojo.FieldType(false, new ArrowType.Int(64, true), null),
+                                            null
                                         ),
-                                        AggregateCall.create(
-                                            SqlStdOperatorTable.SUM,
-                                            false,
-                                            false,
-                                            false,
-                                            List.of(),
-                                            originalCall.getArgList(),
-                                            -1,
-                                            null,
-                                            RelCollations.EMPTY,
-                                            sumType,
-                                            "sum"
+                                        new org.apache.arrow.vector.types.pojo.Field(
+                                            "[sum]",
+                                            new org.apache.arrow.vector.types.pojo.FieldType(
+                                                false,
+                                                new ArrowType.FloatingPoint(org.apache.arrow.vector.types.FloatingPointPrecision.DOUBLE),
+                                                null
+                                            ),
+                                            null
                                         )
-                                    );
-                                }
-
-                                @Override
-                                public RexNode finalExpression(RexBuilder rexBuilder, List<RexNode> partialRefs) {
-                                    RelDataType dbl = rexBuilder.getTypeFactory().createSqlType(SqlTypeName.DOUBLE);
-                                    return rexBuilder.makeCall(
-                                        SqlStdOperatorTable.DIVIDE,
-                                        rexBuilder.makeCast(dbl, partialRefs.get(1)),
-                                        rexBuilder.makeCast(dbl, partialRefs.get(0))
-                                    );
-                                }
-                            };
-                            caps.add(new AggregateCapability(func, Set.of(type), formats, avgDecomp, null, null));
+                                    ),
+                                    (rb, refs) -> {
+                                        RelDataType dbl = rb.getTypeFactory().createSqlType(SqlTypeName.DOUBLE);
+                                        return rb.makeCall(
+                                            SqlStdOperatorTable.DIVIDE,
+                                            rb.makeCast(dbl, refs.get(1)),
+                                            rb.makeCast(dbl, refs.get(0))
+                                        );
+                                    }
+                                )
+                            );
                         } else {
                             caps.add(AggregateCapability.simple(func, Set.of(type), formats));
                         }
