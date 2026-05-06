@@ -73,7 +73,7 @@ public class DataFusionInstructionHandlerFactory implements FragmentInstructionH
             return new PartialAggregateInstructionHandler();
         }
         if (node instanceof FinalAggregateInstructionNode) {
-            return new FinalAggregateInstructionHandler();
+            return new FinalAggregateInstructionHandler(plugin);
         }
         throw new UnsupportedOperationException("No handler for instruction type: " + node.type());
     }

@@ -17,7 +17,7 @@
 //!    creates a [`PartitionStreamSender`] / [`PartitionStreamReceiver`] pair,
 //!    wraps the receiver in a [`SingleReceiverPartition`], and registers it as
 //!    a [`StreamingTable`] on the session under the input id.
-//! 2. [`LocalSession::execute_substrait`] decodes a Substrait plan against the
+//! 2. [`LocalSession::execute_prepared`] decodes a Substrait plan against the
 //!    session (its table references resolve to the streaming tables) and hands
 //!    back a [`SendableRecordBatchStream`] the bridge layer can drain.
 //!
@@ -49,9 +49,10 @@ use crate::partition_stream::{channel, PartitionStreamSender, SingleReceiverPart
 /// accounting shares the node-wide pool. One session corresponds to one reduce
 /// stage; it holds the streaming inputs registered by
 /// [`Self::register_partition`] and is drained exactly once via
-/// [`Self::execute_substrait`].
+/// [`Self::execute_substrait` or `Self::execute_prepared`].
 pub struct LocalSession {
     ctx: SessionContext,
+    pub prepared_plan: Option<Arc<dyn datafusion::physical_plan::ExecutionPlan>>,
 }
 
 impl LocalSession {
@@ -73,7 +74,10 @@ impl LocalSession {
             .build();
         let ctx = SessionContext::new_with_state(state);
         crate::udf::register_all(&ctx);
-        Self { ctx }
+        Self {
+            ctx,
+            prepared_plan: None,
+        }
     }
 
     /// Registers a streaming input on the session under `name` and returns the
@@ -81,7 +85,7 @@ impl LocalSession {
     ///
     /// The receiver is wrapped in a [`SingleReceiverPartition`] and registered
     /// as a [`StreamingTable`]; Substrait plans executed through
-    /// [`Self::execute_substrait`] resolve table references named `name` to
+    /// [`Self::execute_substrait` or `Self::execute_prepared`] resolve table references named `name` to
     /// this streaming table. The caller pushes `RecordBatch`es into the
     /// returned [`PartitionStreamSender`] via
     /// [`PartitionStreamSender::send_blocking`].
@@ -126,40 +130,34 @@ impl LocalSession {
         Ok(())
     }
 
-    /// Decodes a Substrait plan against the session and returns the resulting
-    /// stream.
-    ///
-    /// Table references in the plan resolve through the session's registered
-    /// streaming tables, so input batches pushed into
-    /// [`PartitionStreamSender`]s flow naturally into the DataFusion physical
-    /// plan. The returned stream is hot — polling it drives both the reduce
-    /// computation and the consumption of the streaming inputs.
-    pub async fn execute_substrait(
-        &self,
-        bytes: &[u8],
-    ) -> Result<SendableRecordBatchStream, DataFusionError> {
-        self.execute_substrait_with_mode(bytes, crate::agg_mode::Mode::Default).await
+    /// Decodes and executes a Substrait plan directly (no mode forcing).
+    /// Used for non-aggregate queries and tests.
+    pub async fn execute_substrait(&self, bytes: &[u8]) -> Result<SendableRecordBatchStream, DataFusionError> {
+        let plan = Plan::decode(bytes).map_err(|e| {
+            DataFusionError::Execution(format!("Failed to decode Substrait plan: {}", e))
+        })?;
+        let logical_plan = from_substrait_plan(&self.ctx.state(), &plan).await?;
+        self.ctx.execute_logical_plan(logical_plan).await?.execute_stream().await
     }
 
-    /// Executes a Substrait plan with optional aggregate mode forcing.
-    /// `mode`: 0 = default, 1 = partial, 2 = final.
-    pub async fn execute_substrait_with_mode(
-        &self,
-        bytes: &[u8],
-        mode: crate::agg_mode::Mode,
-    ) -> Result<SendableRecordBatchStream, DataFusionError> {
+    /// Prepares a physical plan in final aggregate mode and stores it for later execution.
+    pub async fn prepare_final_plan(&mut self, bytes: &[u8]) -> Result<(), DataFusionError> {
         let plan = Plan::decode(bytes).map_err(|e| {
             DataFusionError::Execution(format!("Failed to decode Substrait plan: {}", e))
         })?;
         let logical_plan = from_substrait_plan(&self.ctx.state(), &plan).await?;
         let df = self.ctx.execute_logical_plan(logical_plan).await?;
-        if mode == crate::agg_mode::Mode::Default {
-            return df.execute_stream().await;
-        }
         let physical_plan = df.create_physical_plan().await?;
-        let physical_plan = crate::agg_mode::apply_aggregate_mode(physical_plan, mode)?;
-        let task_ctx = self.ctx.task_ctx();
-        datafusion::physical_plan::execute_stream(physical_plan, task_ctx)
+        let physical_plan = crate::agg_mode::apply_aggregate_mode(physical_plan, crate::agg_mode::Mode::Final)?;
+        self.prepared_plan = Some(physical_plan);
+        Ok(())
+    }
+
+    /// Executes the prepared plan. Panics if no plan was prepared.
+    pub async fn execute_prepared(&self) -> Result<SendableRecordBatchStream, DataFusionError> {
+        let plan = self.prepared_plan.as_ref()
+            .ok_or_else(|| DataFusionError::Execution("No prepared plan on LocalSession".to_string()))?;
+        datafusion::physical_plan::execute_stream(Arc::clone(plan), self.ctx.task_ctx())
     }
 
     /// Returns the memory pool the session's `RuntimeEnv` was built with.

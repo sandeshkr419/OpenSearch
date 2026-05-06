@@ -84,22 +84,14 @@ public final class DatafusionReduceSink extends AbstractDatafusionReduceSink imp
     /** Captures any throwable from the drain thread for surfacing during close(). */
     private final AtomicReference<Throwable> drainFailure = new AtomicReference<>();
 
-    public DatafusionReduceSink(ExchangeSinkContext ctx, NativeRuntimeHandle runtimeHandle) {
-        super(ctx, runtimeHandle);
-        Map<Integer, DatafusionPartitionSender> senders = new LinkedHashMap<>(childInputs.size());
+    public DatafusionReduceSink(ExchangeSinkContext ctx, DataFusionReduceState state) {
+        super(ctx, state.runtimeHandle(), state.session());
+        Map<Integer, DatafusionPartitionSender> senders = state.senders();
         long streamPtr = 0;
         try {
-            // Register one native partition per child stage. The Substrait plan in
-            // ctx.fragmentBytes() references each partition by its "input-<stageId>" name
-            // (DataFusionFragmentConvertor names them this way during plan conversion).
-            for (Map.Entry<Integer, byte[]> child : childInputs.entrySet()) {
-                int childStageId = child.getKey();
-                byte[] schemaIpc = child.getValue();
-                long senderPtr = NativeBridge.registerPartitionStream(session.getPointer(), inputIdFor(childStageId), schemaIpc);
-                senders.put(childStageId, new DatafusionPartitionSender(senderPtr));
-            }
-            streamPtr = NativeBridge.executeLocalPlanFinal(session.getPointer(), ctx.fragmentBytes());
-            this.outStream = new StreamHandle(streamPtr, runtimeHandle);
+            // Plan was prepared by FinalAggregateInstructionHandler — just execute it
+            streamPtr = NativeBridge.executeLocalPreparedPlan(session.getPointer());
+            this.outStream = new StreamHandle(streamPtr, state.runtimeHandle());
         } catch (RuntimeException e) {
             if (streamPtr != 0) {
                 NativeBridge.streamClose(streamPtr);
@@ -115,6 +107,39 @@ public final class DatafusionReduceSink extends AbstractDatafusionReduceSink imp
         this.sendersByChildStageId = senders;
         // Spawn the drain thread AFTER the native handles are constructed so the catch-block
         // doesn't have to deal with thread teardown on construction failure.
+        this.drainThread = new Thread(this::drainLoop, "df-reduce-drain-q" + ctx.queryId() + "-s" + ctx.stageId());
+        this.drainThread.setDaemon(true);
+        this.drainThread.start();
+    }
+
+    /** Package-private constructor for unit tests — does full setup internally. */
+    DatafusionReduceSink(ExchangeSinkContext ctx, NativeRuntimeHandle runtimeHandle) {
+        super(ctx, runtimeHandle, new DatafusionLocalSession(runtimeHandle.get()));
+        Map<Integer, DatafusionPartitionSender> senders = new LinkedHashMap<>(childInputs.size());
+        long streamPtr = 0;
+        try {
+            for (Map.Entry<Integer, byte[]> child : childInputs.entrySet()) {
+                int childStageId = child.getKey();
+                byte[] schemaIpc = child.getValue();
+                long senderPtr = NativeBridge.registerPartitionStream(session.getPointer(), inputIdFor(childStageId), schemaIpc);
+                senders.put(childStageId, new DatafusionPartitionSender(senderPtr));
+            }
+            NativeBridge.prepareFinalPlan(session.getPointer(), ctx.fragmentBytes());
+            streamPtr = NativeBridge.executeLocalPreparedPlan(session.getPointer());
+            this.outStream = new StreamHandle(streamPtr, runtimeHandle);
+        } catch (RuntimeException e) {
+            if (streamPtr != 0) {
+                NativeBridge.streamClose(streamPtr);
+            }
+            for (DatafusionPartitionSender sender : senders.values()) {
+                try {
+                    sender.close();
+                } catch (Throwable ignore) {}
+            }
+            session.close();
+            throw e;
+        }
+        this.sendersByChildStageId = senders;
         this.drainThread = new Thread(this::drainLoop, "df-reduce-drain-q" + ctx.queryId() + "-s" + ctx.stageId());
         this.drainThread.setDaemon(true);
         this.drainThread.start();

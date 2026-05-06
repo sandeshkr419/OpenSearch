@@ -38,7 +38,7 @@ import java.util.List;
  *
  * <p>Lifecycle invariants and {@code feed}/{@code close} skeleton are implemented in
  * {@link AbstractDatafusionReduceSink}. This subclass owns the buffered FFI structs and the
- * close-time {@code registerMemtable + executeLocalPlan + drain} sequence.
+ * close-time {@code registerMemtable + prepareFinalPlan + executeLocalPreparedPlan + drain} sequence.
  *
  * <p><b>Single-input only.</b> The memtable path registers exactly one {@code MemTable}
  * at close time, so multi-input shapes (Union, future Join) are not supported here —
@@ -62,7 +62,7 @@ public final class DatafusionMemtableReduceSink extends AbstractDatafusionReduce
     private final byte[] schemaIpc;
 
     public DatafusionMemtableReduceSink(ExchangeSinkContext ctx, NativeRuntimeHandle runtimeHandle) {
-        super(ctx, runtimeHandle);
+        super(ctx, runtimeHandle, new DatafusionLocalSession(runtimeHandle.get()));
         // Fail fast and close the parent-allocated native session before propagating —
         // super() opened a DatafusionLocalSession that would otherwise leak on construction failure.
         if (childInputs.size() != 1) {
@@ -123,7 +123,8 @@ public final class DatafusionMemtableReduceSink extends AbstractDatafusionReduce
             int singleChildStageId = childInputs.keySet().iterator().next();
             NativeBridge.registerMemtable(session.getPointer(), inputIdFor(singleChildStageId), schemaIpc, arrayPtrs, schemaPtrs);
 
-            streamPtr = NativeBridge.executeLocalPlanFinal(session.getPointer(), ctx.fragmentBytes());
+            NativeBridge.prepareFinalPlan(session.getPointer(), ctx.fragmentBytes());
+            streamPtr = NativeBridge.executeLocalPreparedPlan(session.getPointer());
             try (StreamHandle outStream = new StreamHandle(streamPtr, runtimeHandle)) {
                 streamPtr = 0;
                 drainOutputIntoDownstream(outStream);

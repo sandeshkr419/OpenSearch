@@ -58,7 +58,6 @@ public final class NativeBridge {
     private static final MethodHandle CREATE_LOCAL_SESSION;
     private static final MethodHandle CLOSE_LOCAL_SESSION;
     private static final MethodHandle REGISTER_PARTITION_STREAM;
-    private static final MethodHandle EXECUTE_LOCAL_PLAN_FINAL;
     private static final MethodHandle SENDER_SEND;
     private static final MethodHandle SENDER_CLOSE;
     private static final MethodHandle REGISTER_MEMTABLE;
@@ -76,6 +75,8 @@ public final class NativeBridge {
     private static final MethodHandle CLOSE_SESSION_CONTEXT;
     private static final MethodHandle EXECUTE_WITH_CONTEXT;
     private static final MethodHandle PREPARE_PARTIAL_PLAN;
+    private static final MethodHandle PREPARE_FINAL_PLAN;
+    private static final MethodHandle EXECUTE_LOCAL_PREPARED_PLAN;
 
     static {
         SymbolLookup lib = NativeLibraryLoader.symbolLookup();
@@ -205,11 +206,6 @@ public final class NativeBridge {
                 ValueLayout.ADDRESS,
                 ValueLayout.JAVA_LONG
             )
-        );
-
-        EXECUTE_LOCAL_PLAN_FINAL = linker.downcallHandle(
-            lib.find("df_execute_local_plan_final").orElseThrow(),
-            FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG)
         );
 
         // i64 df_sender_send(sender_ptr, array_ptr, schema_ptr)
@@ -362,6 +358,16 @@ public final class NativeBridge {
         PREPARE_PARTIAL_PLAN = linker.downcallHandle(
             lib.find("df_prepare_partial_plan").orElseThrow(),
             FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG)
+        );
+
+        PREPARE_FINAL_PLAN = linker.downcallHandle(
+            lib.find("df_prepare_final_plan").orElseThrow(),
+            FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG)
+        );
+
+        EXECUTE_LOCAL_PREPARED_PLAN = linker.downcallHandle(
+            lib.find("df_execute_local_prepared_plan").orElseThrow(),
+            FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG)
         );
     }
 
@@ -657,17 +663,6 @@ public final class NativeBridge {
      * drained via {@link #streamNext} and freed by {@link #streamClose}.
      */
     /**
-     * Executes a Substrait plan on the local session in final-aggregate mode.
-     * Returns an opaque stream pointer drained via {@link #streamNext} and freed by {@link #streamClose}.
-     */
-    public static long executeLocalPlanFinal(long sessionPtr, byte[] substrait) {
-        NativeHandle.validatePointer(sessionPtr, "session");
-        try (var call = new NativeCall()) {
-            return call.invoke(EXECUTE_LOCAL_PLAN_FINAL, sessionPtr, call.bytes(substrait), (long) substrait.length);
-        }
-    }
-
-    /**
      * Pushes one Arrow C Data-exported batch (array + schema addresses) into the sender. The
      * native side takes ownership of both FFI structs.
      */
@@ -757,6 +752,22 @@ public final class NativeBridge {
         NativeHandle.validatePointer(sessionCtxPtr, "sessionContext");
         try (var call = new NativeCall()) {
             call.invoke(PREPARE_PARTIAL_PLAN, sessionCtxPtr, call.bytes(substraitPlan), (long) substraitPlan.length);
+        }
+    }
+
+    /** Prepares a physical plan in final aggregate mode on a LocalSession. */
+    public static void prepareFinalPlan(long sessionPtr, byte[] substraitPlan) {
+        NativeHandle.validatePointer(sessionPtr, "session");
+        try (var call = new NativeCall()) {
+            call.invoke(PREPARE_FINAL_PLAN, sessionPtr, call.bytes(substraitPlan), (long) substraitPlan.length);
+        }
+    }
+
+    /** Executes the prepared plan on a LocalSession. Returns a stream pointer. */
+    public static long executeLocalPreparedPlan(long sessionPtr) {
+        NativeHandle.validatePointer(sessionPtr, "session");
+        try (var call = new NativeCall()) {
+            return call.invoke(EXECUTE_LOCAL_PREPARED_PLAN, sessionPtr);
         }
     }
 

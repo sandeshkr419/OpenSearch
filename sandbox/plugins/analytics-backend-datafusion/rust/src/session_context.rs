@@ -38,7 +38,7 @@ pub struct SessionContextHandle {
     pub object_metas: Arc<Vec<ObjectMeta>>,
     pub query_context: QueryTrackingContext,
     pub aggregate_mode: crate::agg_mode::Mode,
-    pub prepared_plan: Option<Arc<dyn datafusion::physical_plan::ExecutionPlan + Send + Sync>>,
+    pub prepared_plan: Option<Arc<dyn datafusion::physical_plan::ExecutionPlan>>,
 }
 
 /// Creates a SessionContext with per-query RuntimeEnv and registers the default

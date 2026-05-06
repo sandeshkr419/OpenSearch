@@ -79,10 +79,10 @@ abstract class AbstractDatafusionReduceSink implements ExchangeSink {
     /** Set once in {@link #close} under {@link #feedLock}. Visible to all threads via volatile. */
     protected volatile boolean closed;
 
-    protected AbstractDatafusionReduceSink(ExchangeSinkContext ctx, NativeRuntimeHandle runtimeHandle) {
+    protected AbstractDatafusionReduceSink(ExchangeSinkContext ctx, NativeRuntimeHandle runtimeHandle, DatafusionLocalSession session) {
         this.ctx = ctx;
         this.runtimeHandle = runtimeHandle;
-        this.session = new DatafusionLocalSession(runtimeHandle.get());
+        this.session = session;
         Map<Integer, byte[]> inputs = new LinkedHashMap<>(ctx.childInputs().size());
         for (ExchangeSinkContext.ChildInput child : ctx.childInputs()) {
             inputs.put(child.childStageId(), ArrowSchemaIpc.toBytes(child.schema()));

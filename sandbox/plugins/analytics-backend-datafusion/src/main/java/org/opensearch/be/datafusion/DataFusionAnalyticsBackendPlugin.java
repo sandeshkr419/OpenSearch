@@ -325,24 +325,8 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
     @Override
     public ExchangeSinkProvider getExchangeSinkProvider() {
         return (ctx, backendContext) -> {
-            DataFusionService svc = plugin.getDataFusionService();
-            if (svc == null) {
-                throw new IllegalStateException("DataFusionService not initialized");
-            }
-            String mode = plugin.getClusterService() != null
-                ? plugin.getClusterService().getClusterSettings().get(DataFusionPlugin.DATAFUSION_REDUCE_INPUT_MODE)
-                : "streaming";
-            // Memtable mode is single-input only (DatafusionMemtableReduceSink registers
-            // exactly one MemTable at close time). Multi-input shapes (Union, future Join)
-            // need per-child input partitions, which only the streaming sink implements via
-            // MultiInputExchangeSink#sinkForChild. Auto-fall-back to streaming so end users
-            // don't have to flip the cluster setting per query.
-            // TODO: lift this fallback once the memtable sink registers one MemTable per
-            // child stage (see DatafusionMemtableReduceSink class javadoc).
-            if ("memtable".equals(mode) && ctx.childInputs().size() == 1) {
-                return new DatafusionMemtableReduceSink(ctx, svc.getNativeRuntime());
-            }
-            return new DatafusionReduceSink(ctx, svc.getNativeRuntime());
+            DataFusionReduceState state = (DataFusionReduceState) backendContext;
+            return new DatafusionReduceSink(ctx, state);
         };
     }
 }

@@ -496,7 +496,7 @@ pub unsafe fn sql_to_substrait(
 // reduce stage, streaming inputs are registered under synthetic names, a
 // Substrait plan is executed against those inputs, and the output stream is
 // drained via the existing `stream_next` / `stream_close` exports (because
-// `execute_local_plan` hands back a `QueryStreamHandle` of the same shape
+// Coordinator-reduce hands back a `QueryStreamHandle` of the same shape
 // `execute_query` returns).
 // ---------------------------------------------------------------------------
 
@@ -572,34 +572,6 @@ pub unsafe fn register_partition_stream(
 /// (`block_on` for synchronous FFM entry, `spawn` for async delivery).
 ///
 /// # Safety
-/// `session_ptr` must be a valid, non-zero pointer returned by
-/// `create_local_session`.
-pub async unsafe fn execute_local_plan(
-    session_ptr: i64,
-    substrait_bytes: &[u8],
-    manager: &RuntimeManager,
-    context_id: i64,
-    mode: crate::agg_mode::Mode,
-) -> Result<i64, DataFusionError> {
-    let session = &*(session_ptr as *const LocalSession);
-
-    // Per-query memory tracking — wraps the session's global pool. A
-    // `context_id` of 0 disables tracking (pool is not consulted).
-    let query_context = QueryTrackingContext::new(context_id, session.memory_pool());
-
-    let df_stream = session.execute_substrait_with_mode(substrait_bytes, mode).await?;
-
-    // Wrap the output in the same CrossRtStream + RecordBatchStreamAdapter
-    // shape as `execute_query`, so existing `stream_next` / `stream_close`
-    // drain this handle unchanged.
-    let cross_rt_stream =
-        CrossRtStream::new_with_df_error_stream(df_stream, manager.cpu_executor());
-    let wrapped = RecordBatchStreamAdapter::new(cross_rt_stream.schema(), cross_rt_stream);
-
-    let handle = QueryStreamHandle::new(wrapped, query_context);
-    Ok(Box::into_raw(Box::new(handle)) as i64)
-}
-
 /// Imports an Arrow C Data batch and pushes it through the partition
 /// stream's mpsc. The Rust side takes ownership of the
 /// `FFI_ArrowArray` / `FFI_ArrowSchema` structs on success — the Java side

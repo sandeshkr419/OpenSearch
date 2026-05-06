@@ -238,7 +238,7 @@ pub unsafe extern "C" fn df_sql_to_substrait(
 // so `Err(String)` returns are converted into a negated heap-allocated error
 // string pointer that `NativeCall.invoke` reads and frees on the Java side.
 // Close functions are infallible and do not use the macro. The output stream
-// returned by `df_execute_local_plan` is the same `QueryStreamHandle` shape
+// The output stream from coordinator-reduce is the same `QueryStreamHandle` shape
 // as `df_execute_query`, so it drains through the existing `df_stream_next` /
 // `df_stream_close` paths unchanged.
 // ---------------------------------------------------------------------------
@@ -284,45 +284,45 @@ pub unsafe extern "C" fn df_register_partition_stream(
 
 #[ffm_safe]
 #[no_mangle]
-pub unsafe extern "C" fn df_execute_local_plan(
+pub unsafe extern "C" fn df_prepare_final_plan(
     session_ptr: i64,
     substrait_ptr: *const u8,
     substrait_len: i64,
 ) -> i64 {
-    execute_local_plan_mode(session_ptr, substrait_ptr, substrait_len, crate::agg_mode::Mode::Default)
+    let mgr = get_rt_manager()?;
+    let plan_bytes = slice::from_raw_parts(substrait_ptr, substrait_len as usize);
+    let session = &mut *(session_ptr as *mut crate::local_executor::LocalSession);
+    mgr.io_runtime
+        .block_on(session.prepare_final_plan(plan_bytes))
+        .map_err(|e| e.to_string())?;
+    Ok(0)
 }
 
 #[ffm_safe]
 #[no_mangle]
-pub unsafe extern "C" fn df_execute_local_plan_final(
-    session_ptr: i64,
-    substrait_ptr: *const u8,
-    substrait_len: i64,
-) -> i64 {
-    execute_local_plan_mode(session_ptr, substrait_ptr, substrait_len, crate::agg_mode::Mode::Final)
-}
-
-unsafe fn execute_local_plan_mode(
-    session_ptr: i64,
-    substrait_ptr: *const u8,
-    substrait_len: i64,
-    mode: crate::agg_mode::Mode,
-) -> Result<i64, String> {
+pub unsafe extern "C" fn df_execute_local_prepared_plan(session_ptr: i64) -> i64 {
     let mgr = get_rt_manager()?;
-    let bytes_vec = slice::from_raw_parts(substrait_ptr, substrait_len as usize).to_vec();
-    let mgr_for_inner = Arc::clone(&mgr);
+    let session = &*(session_ptr as *const crate::local_executor::LocalSession);
     let mgr_for_spawn = Arc::clone(&mgr);
     mgr.io_runtime
         .block_on(async move {
-            let inner_fut = async move {
-                unsafe { api::execute_local_plan(session_ptr, &bytes_vec, &mgr_for_inner, 0, mode).await }
-            };
+            let inner_fut = async move { session.execute_prepared().await };
             match mgr_for_spawn.cpu_executor().spawn(inner_fut).await {
                 Ok(inner_result) => inner_result,
                 Err(e) => Err(datafusion::error::DataFusionError::Execution(format!(
-                    "execute_local_plan: CPU spawn failed: {e:?}"
+                    "execute_local_prepared_plan: CPU spawn failed: {e:?}"
                 ))),
             }
+        })
+        .map(|stream| {
+            let cross_rt = crate::cross_rt_stream::CrossRtStream::new_with_df_error_stream(stream, mgr.cpu_executor());
+            let wrapped = datafusion::physical_plan::stream::RecordBatchStreamAdapter::new(
+                cross_rt.schema(), cross_rt,
+            );
+            let handle = crate::api::QueryStreamHandle::new(
+                wrapped, crate::query_memory_pool_tracker::QueryTrackingContext::new(0, session.memory_pool()),
+            );
+            Box::into_raw(Box::new(handle)) as i64
         })
         .map_err(|e| e.to_string())
 }
