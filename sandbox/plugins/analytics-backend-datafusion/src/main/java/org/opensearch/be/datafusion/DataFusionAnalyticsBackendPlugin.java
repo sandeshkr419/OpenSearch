@@ -8,7 +8,19 @@
 
 package org.opensearch.be.datafusion;
 
+import org.apache.arrow.vector.types.pojo.ArrowType;
+import org.apache.calcite.rel.RelCollations;
+import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.core.AggregateCall;
+import org.apache.calcite.rel.type.RelDataType;
+import org.apache.calcite.rel.type.RelDataTypeFactory;
+import org.apache.calcite.rex.RexBuilder;
+import org.apache.calcite.rex.RexNode;
+import org.apache.calcite.sql.fun.SqlStdOperatorTable;
+import org.apache.calcite.sql.type.SqlTypeFamily;
+import org.apache.calcite.sql.type.SqlTypeName;
 import org.opensearch.analytics.spi.AggregateCapability;
+import org.opensearch.analytics.spi.AggregateDecomposition;
 import org.opensearch.analytics.spi.AggregateFunction;
 import org.opensearch.analytics.spi.AnalyticsSearchBackendPlugin;
 import org.opensearch.analytics.spi.BackendCapabilityProvider;
@@ -26,8 +38,10 @@ import org.opensearch.analytics.spi.SearchExecEngineProvider;
 import org.opensearch.index.engine.dataformat.DataFormatRegistry;
 
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.UnaryOperator;
 
 /**
  * SPI extension discovered by analytics-engine via {@code META-INF/services}.
@@ -83,7 +97,8 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
         AggregateFunction.MIN,
         AggregateFunction.MAX,
         AggregateFunction.COUNT,
-        AggregateFunction.AVG
+        AggregateFunction.AVG,
+        AggregateFunction.APPROX_COUNT_DISTINCT
     );
 
     private final DataFusionPlugin plugin;
@@ -139,7 +154,67 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
                 Set<AggregateCapability> caps = new HashSet<>();
                 for (AggregateFunction func : AGG_FUNCTIONS) {
                     for (FieldType type : SUPPORTED_FIELD_TYPES) {
-                        caps.add(AggregateCapability.simple(func, Set.of(type), formats));
+                        if (func == AggregateFunction.APPROX_COUNT_DISTINCT) {
+                            caps.add(AggregateCapability.approximate(func, Set.of(type), formats, ArrowType.Binary.INSTANCE));
+                        } else if (func == AggregateFunction.AVG) {
+                            AggregateDecomposition avgDecomp = new AggregateDecomposition() {
+                                @Override
+                                public List<AggregateCall> partialCalls(AggregateCall originalCall, RelNode input) {
+                                    RelDataTypeFactory tf = input.getCluster().getTypeFactory();
+                                    RelDataType countType = tf.createSqlType(SqlTypeName.BIGINT);
+                                    // SUM type: BIGINT for integer inputs, DOUBLE for floating point
+                                    RelDataType inputFieldType = input.getRowType()
+                                        .getFieldList()
+                                        .get(originalCall.getArgList().get(0))
+                                        .getType();
+                                    SqlTypeName sumTypeName = SqlTypeFamily.INTEGER.getTypeNames().contains(inputFieldType.getSqlTypeName())
+                                        ? SqlTypeName.BIGINT
+                                        : SqlTypeName.DOUBLE;
+                                    RelDataType sumType = tf.createTypeWithNullability(tf.createSqlType(sumTypeName), true);
+                                    return List.of(
+                                        AggregateCall.create(
+                                            SqlStdOperatorTable.COUNT,
+                                            false,
+                                            false,
+                                            false,
+                                            List.of(),
+                                            originalCall.getArgList(),
+                                            -1,
+                                            null,
+                                            RelCollations.EMPTY,
+                                            countType,
+                                            "count"
+                                        ),
+                                        AggregateCall.create(
+                                            SqlStdOperatorTable.SUM,
+                                            false,
+                                            false,
+                                            false,
+                                            List.of(),
+                                            originalCall.getArgList(),
+                                            -1,
+                                            null,
+                                            RelCollations.EMPTY,
+                                            sumType,
+                                            "sum"
+                                        )
+                                    );
+                                }
+
+                                @Override
+                                public RexNode finalExpression(RexBuilder rexBuilder, List<RexNode> partialRefs) {
+                                    RelDataType dbl = rexBuilder.getTypeFactory().createSqlType(SqlTypeName.DOUBLE);
+                                    return rexBuilder.makeCall(
+                                        SqlStdOperatorTable.DIVIDE,
+                                        rexBuilder.makeCast(dbl, partialRefs.get(1)),
+                                        rexBuilder.makeCast(dbl, partialRefs.get(0))
+                                    );
+                                }
+                            };
+                            caps.add(new AggregateCapability(func, Set.of(type), formats, avgDecomp, null, null));
+                        } else {
+                            caps.add(AggregateCapability.simple(func, Set.of(type), formats));
+                        }
                     }
                 }
                 return Set.copyOf(caps);
@@ -148,6 +223,26 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
             @Override
             public Map<ScalarFunction, ScalarFunctionAdapter> scalarFunctionAdapters() {
                 return Map.of(ScalarFunction.TIMESTAMP, new TimestampFunctionAdapter(), ScalarFunction.SARG_PREDICATE, new SargAdapter());
+            }
+
+            @Override
+            public Map<AggregateFunction, UnaryOperator<AggregateCall>> aggregateCallAdapters() {
+                return Map.of(AggregateFunction.COUNT, call -> {
+                    if (!call.isDistinct() || call.isApproximate()) return call;
+                    return AggregateCall.create(
+                        SqlStdOperatorTable.APPROX_COUNT_DISTINCT,
+                        true,
+                        true,
+                        call.ignoreNulls(),
+                        call.rexList,
+                        call.getArgList(),
+                        call.filterArg,
+                        call.distinctKeys,
+                        call.collation,
+                        call.type,
+                        call.name
+                    );
+                });
             }
         };
     }
@@ -184,6 +279,7 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
             if (backendContext != null) {
                 DataFusionSessionState sessionState = (DataFusionSessionState) backendContext;
                 context.setSessionContextHandle(sessionState.sessionContextHandle());
+                context.setAggregateMode(sessionState.mode());
             }
             DatafusionSearchExecEngine engine = new DatafusionSearchExecEngine(context);
             engine.prepare(ctx);

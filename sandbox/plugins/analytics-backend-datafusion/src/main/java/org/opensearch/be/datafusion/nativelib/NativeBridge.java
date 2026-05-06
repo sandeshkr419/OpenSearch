@@ -8,6 +8,7 @@
 
 package org.opensearch.be.datafusion.nativelib;
 
+import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.opensearch.analytics.backend.jni.NativeHandle;
 import org.opensearch.core.action.ActionListener;
 import org.opensearch.nativebridge.spi.NativeCall;
@@ -56,6 +57,7 @@ public final class NativeBridge {
     private static final MethodHandle CLOSE_LOCAL_SESSION;
     private static final MethodHandle REGISTER_PARTITION_STREAM;
     private static final MethodHandle EXECUTE_LOCAL_PLAN;
+    private static final MethodHandle EXECUTE_LOCAL_PLAN_FINAL;
     private static final MethodHandle SENDER_SEND;
     private static final MethodHandle SENDER_CLOSE;
     private static final MethodHandle REGISTER_MEMTABLE;
@@ -72,6 +74,8 @@ public final class NativeBridge {
     private static final MethodHandle CREATE_SESSION_CONTEXT;
     private static final MethodHandle CLOSE_SESSION_CONTEXT;
     private static final MethodHandle EXECUTE_WITH_CONTEXT;
+    private static final MethodHandle EXECUTE_WITH_CONTEXT_PARTIAL;
+    private static final MethodHandle EXECUTE_WITH_CONTEXT_FINAL;
 
     static {
         SymbolLookup lib = NativeLibraryLoader.symbolLookup();
@@ -191,6 +195,11 @@ public final class NativeBridge {
         // i64 df_execute_local_plan(session_ptr, substrait_ptr, substrait_len)
         EXECUTE_LOCAL_PLAN = linker.downcallHandle(
             lib.find("df_execute_local_plan").orElseThrow(),
+            FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG)
+        );
+
+        EXECUTE_LOCAL_PLAN_FINAL = linker.downcallHandle(
+            lib.find("df_execute_local_plan_final").orElseThrow(),
             FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG)
         );
 
@@ -338,6 +347,16 @@ public final class NativeBridge {
 
         EXECUTE_WITH_CONTEXT = linker.downcallHandle(
             lib.find("df_execute_with_context").orElseThrow(),
+            FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG)
+        );
+
+        EXECUTE_WITH_CONTEXT_PARTIAL = linker.downcallHandle(
+            lib.find("df_execute_with_context_partial").orElseThrow(),
+            FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG)
+        );
+
+        EXECUTE_WITH_CONTEXT_FINAL = linker.downcallHandle(
+            lib.find("df_execute_with_context_final").orElseThrow(),
             FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG)
         );
     }
@@ -610,10 +629,18 @@ public final class NativeBridge {
      * Executes a Substrait plan on the session, returning an opaque stream pointer. The stream is
      * drained via {@link #streamNext} and freed by {@link #streamClose}.
      */
-    public static long executeLocalPlan(long sessionPtr, byte[] substrait) {
+    /**
+     * Executes a Substrait plan on the local session with the given aggregate execution mode.
+     * Returns an opaque stream pointer drained via {@link #streamNext} and freed by {@link #streamClose}.
+     */
+    public static long executeLocalPlan(long sessionPtr, byte[] substrait, AggregateExecutionMode mode) {
         NativeHandle.validatePointer(sessionPtr, "session");
+        MethodHandle handle = switch (mode) {
+            case FINAL -> EXECUTE_LOCAL_PLAN_FINAL;
+            default -> EXECUTE_LOCAL_PLAN;
+        };
         try (var call = new NativeCall()) {
-            return call.invoke(EXECUTE_LOCAL_PLAN, sessionPtr, call.bytes(substrait), (long) substrait.length);
+            return call.invoke(handle, sessionPtr, call.bytes(substrait), (long) substrait.length);
         }
     }
 
@@ -701,10 +728,24 @@ public final class NativeBridge {
         NativeCall.invokeVoid(CLOSE_SESSION_CONTEXT, ptr);
     }
 
-    public static void executeWithContextAsync(long sessionCtxPtr, byte[] substraitPlan, ActionListener<Long> listener) {
+    /**
+     * Executes a Substrait plan against the configured SessionContext with the given aggregate mode.
+     * Consumes the session context handle (freed internally when stream closes).
+     */
+    public static void executeWithContextAsync(
+        long sessionCtxPtr,
+        byte[] substraitPlan,
+        AggregateExecutionMode mode,
+        ActionListener<Long> listener
+    ) {
         NativeHandle.validatePointer(sessionCtxPtr, "sessionContext");
+        MethodHandle handle = switch (mode) {
+            case PARTIAL -> EXECUTE_WITH_CONTEXT_PARTIAL;
+            case FINAL -> EXECUTE_WITH_CONTEXT_FINAL;
+            default -> EXECUTE_WITH_CONTEXT;
+        };
         try (var call = new NativeCall()) {
-            long result = call.invoke(EXECUTE_WITH_CONTEXT, sessionCtxPtr, call.bytes(substraitPlan), (long) substraitPlan.length);
+            long result = call.invoke(handle, sessionCtxPtr, call.bytes(substraitPlan), (long) substraitPlan.length);
             listener.onResponse(result);
         } catch (Throwable throwable) {
             listener.onFailure(throwable instanceof Exception ? (Exception) throwable : new RuntimeException(throwable));

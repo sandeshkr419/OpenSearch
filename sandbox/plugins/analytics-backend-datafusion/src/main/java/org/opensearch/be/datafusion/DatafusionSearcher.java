@@ -58,17 +58,22 @@ public class DatafusionSearcher implements EngineSearcher<DatafusionContext> {
         DatafusionQuery query = context.getDatafusionQuery();
         NativeRuntimeHandle runtimeHandle = context.getNativeRuntime();
         CompletableFuture<Long> future = new CompletableFuture<>();
-        NativeBridge.executeWithContextAsync(sessionCtx.getPointer(), query.getSubstraitBytes(), new ActionListener<>() {
-            @Override
-            public void onResponse(Long streamPtr) {
-                future.complete(streamPtr);
-            }
+        NativeBridge.executeWithContextAsync(
+            sessionCtx.getPointer(),
+            query.getSubstraitBytes(),
+            context.getAggregateMode(),
+            new ActionListener<>() {
+                @Override
+                public void onResponse(Long streamPtr) {
+                    future.complete(streamPtr);
+                }
 
-            @Override
-            public void onFailure(Exception exception) {
-                future.completeExceptionally(exception);
+                @Override
+                public void onFailure(Exception exception) {
+                    future.completeExceptionally(exception);
+                }
             }
-        });
+        );
         long streamPtr;
         try {
             streamPtr = future.join();

@@ -8,44 +8,47 @@
 
 package org.opensearch.analytics.spi;
 
+import org.apache.arrow.vector.types.pojo.ArrowType;
+import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.calcite.rex.RexBuilder;
+import org.apache.calcite.rex.RexNode;
 import org.opensearch.common.Nullable;
 
+import java.util.List;
 import java.util.Set;
+import java.util.function.BiFunction;
 
 /**
  * Declares that a backend can evaluate a specific {@link AggregateFunction}
  * on a specific {@link FieldType} in the given data formats.
  *
- * <p>Flat record because all subcategories share the same shape. The category
- * lives on {@link AggregateFunction#getType()}. Per-type factory methods
- * validate the function type at construction and make backend declarations
- * self-documenting.
+ * <p>{@link #intermediateFields()} is non-null when the backend's partial state differs
+ * from the Calcite-declared return type. Each entry describes one column of the partial
+ * state (name suffix + Arrow type). The framework uses this to build the streaming table
+ * schema and expand the coordinator's scan row type.
  *
- * <p>{@link #decomposition()} is null for most functions — the planner applies
- * Calcite's standard decomposition (AVG → SUM/COUNT, STDDEV → SUM(x²)+SUM(x)+COUNT).
- * Backends with non-standard partial state (e.g. HLL sketches, Welford STDDEV)
- * provide a custom {@link AggregateDecomposition}.
- *
- * <p>TODO (plan forking): during resolution of a plan alternative, after a single
- * backend is chosen for an aggregate operator, apply decomposition as a paired
- * rewrite of PARTIAL output schema + FINAL input schema:
- * <ol>
- *   <li>If decomposition == null: apply Calcite's AggregateReduceFunctionsRule
- *       to the PARTIAL+FINAL pair.</li>
- *   <li>If decomposition != null: use decomposition.partialCalls() to rewrite
- *       PARTIAL's aggCalls and output row type, then use decomposition.finalExpression()
- *       to rewrite FINAL's aggCalls. Both must be updated together — the exchange
- *       row type between them must be consistent.</li>
- * </ol>
+ * <p>{@link #finalExpression()} is non-null when the coordinator must combine the partial
+ * state columns into the final result using a custom expression (e.g. AVG = sum/count).
  *
  * @opensearch.internal
  */
 public record AggregateCapability(AggregateFunction function, Set<FieldType> fieldTypes, Set<String> formats,
-    @Nullable AggregateDecomposition decomposition) {
+    @Nullable AggregateDecomposition decomposition, @Nullable List<Field> intermediateFields, @Nullable BiFunction<
+        RexBuilder,
+        List<RexNode>,
+        RexNode> finalExpression) {
 
-    /** Convenience constructor with no custom decomposition (uses Calcite's standard). */
     public AggregateCapability(AggregateFunction function, Set<FieldType> fieldTypes, Set<String> formats) {
-        this(function, fieldTypes, formats, null);
+        this(function, fieldTypes, formats, null, null, null);
+    }
+
+    public AggregateCapability(
+        AggregateFunction function,
+        Set<FieldType> fieldTypes,
+        Set<String> formats,
+        @Nullable AggregateDecomposition decomposition
+    ) {
+        this(function, fieldTypes, formats, decomposition, null, null);
     }
 
     public static AggregateCapability simple(AggregateFunction function, Set<FieldType> fieldTypes, Set<String> formats) {
@@ -63,8 +66,29 @@ public record AggregateCapability(AggregateFunction function, Set<FieldType> fie
         return new AggregateCapability(function, fieldTypes, formats);
     }
 
-    public static AggregateCapability approximate(AggregateFunction function, Set<FieldType> fieldTypes, Set<String> formats) {
+    /** Factory for functions whose partial state is a single non-standard Arrow type. */
+    public static AggregateCapability approximate(
+        AggregateFunction function,
+        Set<FieldType> fieldTypes,
+        Set<String> formats,
+        ArrowType intermediateArrowType
+    ) {
         assert function.getType() == AggregateFunction.Type.APPROXIMATE;
-        return new AggregateCapability(function, fieldTypes, formats);
+        Field field = new Field("", new org.apache.arrow.vector.types.pojo.FieldType(true, intermediateArrowType, null), null);
+        return new AggregateCapability(function, fieldTypes, formats, null, List.of(field), null);
+    }
+
+    /**
+     * Factory for functions whose partial state spans multiple fields and whose final
+     * result requires a custom combination expression over those fields.
+     */
+    public static AggregateCapability withIntermediateFields(
+        AggregateFunction function,
+        Set<FieldType> fieldTypes,
+        Set<String> formats,
+        List<Field> intermediateFields,
+        BiFunction<RexBuilder, List<RexNode>, RexNode> finalExpression
+    ) {
+        return new AggregateCapability(function, fieldTypes, formats, null, intermediateFields, finalExpression);
     }
 }

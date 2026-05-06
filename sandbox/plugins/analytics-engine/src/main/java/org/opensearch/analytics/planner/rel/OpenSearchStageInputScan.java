@@ -86,4 +86,9 @@ public class OpenSearchStageInputScan extends AbstractRelNode implements OpenSea
     public RelNode stripAnnotations(List<RelNode> strippedChildren) {
         return this; // Leaf placeholder — no annotations, no children to strip.
     }
+
+    /** Returns a copy with a different row type (used for intermediate-field expansion). */
+    public OpenSearchStageInputScan withRowType(RelDataType newRowType) {
+        return new OpenSearchStageInputScan(getCluster(), getTraitSet(), childStageId, newRowType, viableBackends);
+    }
 }

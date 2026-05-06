@@ -8,9 +8,17 @@
 
 package org.opensearch.analytics.exec.stage;
 
+import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.arrow.vector.types.pojo.Schema;
+import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.core.Aggregate;
+import org.apache.calcite.rel.core.AggregateCall;
+import org.apache.calcite.rel.type.RelDataTypeField;
 import org.opensearch.analytics.exec.QueryContext;
+import org.opensearch.analytics.planner.CapabilityRegistry;
 import org.opensearch.analytics.planner.dag.Stage;
 import org.opensearch.analytics.planner.dag.StageExecutionType;
+import org.opensearch.analytics.spi.AggregateFunction;
 import org.opensearch.analytics.spi.BackendExecutionContext;
 import org.opensearch.analytics.spi.ExchangeSink;
 import org.opensearch.analytics.spi.ExchangeSinkContext;
@@ -39,6 +47,12 @@ import java.util.List;
  * @opensearch.internal
  */
 final class LocalStageScheduler implements StageScheduler {
+
+    private final CapabilityRegistry capabilityRegistry;
+
+    LocalStageScheduler(CapabilityRegistry capabilityRegistry) {
+        this.capabilityRegistry = capabilityRegistry;
+    }
 
     @Override
     public StageExecution createExecution(Stage stage, ExchangeSink sink, QueryContext config) {
@@ -91,7 +105,7 @@ final class LocalStageScheduler implements StageScheduler {
      * input, e.g. {@code "input-<stageId>"}) and the Arrow schema derived from the
      * child fragment's row type.
      */
-    private static List<ExchangeSinkContext.ChildInput> buildChildInputs(Stage stage) {
+    private List<ExchangeSinkContext.ChildInput> buildChildInputs(Stage stage) {
         List<Stage> children = stage.getChildStages();
         if (children.isEmpty()) {
             throw new IllegalStateException(
@@ -100,13 +114,55 @@ final class LocalStageScheduler implements StageScheduler {
         }
         List<ExchangeSinkContext.ChildInput> inputs = new ArrayList<>(children.size());
         for (Stage child : children) {
-            inputs.add(
-                new ExchangeSinkContext.ChildInput(
-                    child.getStageId(),
-                    ArrowSchemaFromCalcite.arrowSchemaFromRowType(child.getFragment().getRowType())
-                )
-            );
+            inputs.add(new ExchangeSinkContext.ChildInput(child.getStageId(), deriveChildSchema(child)));
         }
         return inputs;
+    }
+
+    private Schema deriveChildSchema(Stage child) {
+        RelNode childFragment = child.getPlanAlternatives().isEmpty()
+            ? child.getFragment()
+            : child.getPlanAlternatives().getFirst().resolvedFragment();
+
+        Aggregate agg = findAggregate(childFragment);
+        if (agg == null) {
+            return ArrowSchemaFromCalcite.arrowSchemaFromRowType(childFragment.getRowType());
+        }
+
+        String backendId = child.getPlanAlternatives().isEmpty() ? null : child.getPlanAlternatives().getFirst().backendId();
+
+        List<Field> fields = new ArrayList<>();
+        int groupCount = agg.getGroupSet().cardinality();
+        for (int i = 0; i < groupCount; i++) {
+            RelDataTypeField f = childFragment.getRowType().getFieldList().get(i);
+            fields.add(ArrowSchemaFromCalcite.fieldFromCalcite(f));
+        }
+        for (int i = 0; i < agg.getAggCallList().size(); i++) {
+            AggregateCall call = agg.getAggCallList().get(i);
+            RelDataTypeField f = childFragment.getRowType().getFieldList().get(groupCount + i);
+            List<Field> intermediateFields = resolveIntermediateFields(call, backendId);
+            if (intermediateFields != null) {
+                for (Field iField : intermediateFields) {
+                    String fieldName = iField.getName().isEmpty() ? f.getName() : f.getName() + iField.getName();
+                    fields.add(new Field(fieldName, iField.getFieldType(), null));
+                }
+            } else {
+                fields.add(ArrowSchemaFromCalcite.fieldFromCalcite(f));
+            }
+        }
+        return new Schema(fields);
+    }
+
+    private List<Field> resolveIntermediateFields(AggregateCall call, String backendId) {
+        if (backendId == null || capabilityRegistry == null) return null;
+        AggregateFunction func = AggregateFunction.fromAggregateCall(call);
+        if (func == null) return null;
+        return capabilityRegistry.getIntermediateFields(backendId, func);
+    }
+
+    private static Aggregate findAggregate(RelNode node) {
+        if (node instanceof Aggregate agg) return agg;
+        if (node.getInputs().size() == 1) return findAggregate(node.getInputs().get(0));
+        return null;
     }
 }

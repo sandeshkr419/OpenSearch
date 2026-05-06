@@ -156,10 +156,13 @@ pub async fn execute_query(
 
 /// Executes a Substrait plan against a pre-configured SessionContext.
 /// Consumes the handle — SessionContext lifetime is tied to the returned stream.
+///
+/// `mode`: 0 = default (no forcing), 1 = partial, 2 = final.
 pub async unsafe fn execute_with_context(
     session_ctx_ptr: i64,
     plan_bytes: &[u8],
     cpu_executor: DedicatedExecutor,
+    mode: i32,
 ) -> Result<i64, DataFusionError> {
     let handle = *Box::from_raw(session_ctx_ptr as *mut SessionContextHandle);
 
@@ -169,7 +172,9 @@ pub async unsafe fn execute_with_context(
 
     let logical_plan = from_substrait_plan(&handle.ctx.state(), &substrait_plan).await?;
     let dataframe = handle.ctx.execute_logical_plan(logical_plan).await?;
-    let physical_plan = dataframe.create_physical_plan().await?;
+    let mut physical_plan = dataframe.create_physical_plan().await?;
+
+    physical_plan = apply_aggregate_mode(physical_plan, mode)?;
 
     let df_stream = execute_stream(physical_plan, handle.ctx.task_ctx()).map_err(|e| {
         error!("execute_with_context: failed to create stream: {}", e);
@@ -184,4 +189,93 @@ pub async unsafe fn execute_with_context(
 
     let stream_handle = crate::api::QueryStreamHandle::new(wrapped, handle.query_context);
     Ok(Box::into_raw(Box::new(stream_handle)) as i64)
+}
+
+/// Applies aggregate mode forcing if mode != 0.
+pub fn apply_aggregate_mode(
+    plan: Arc<dyn datafusion::physical_plan::ExecutionPlan>,
+    mode: i32,
+) -> Result<Arc<dyn datafusion::physical_plan::ExecutionPlan>, DataFusionError> {
+    use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
+    match mode {
+        0 => Ok(plan),
+        1 => force_aggregate_mode(plan, AggregateMode::Partial),
+        2 => force_aggregate_mode(plan, AggregateMode::Final),
+        _ => Err(DataFusionError::Execution(format!("Unknown aggregate mode: {mode}"))),
+    }
+}
+
+/// Walks a physical plan and restructures `Final(Partial(...))` pairs for scalar aggregates
+/// (no group-by keys) to force the target aggregation mode:
+/// - `Partial`: strips the Final, keeping only the Partial so the shard emits intermediate state
+/// - `Final`: strips the Partial, connecting Final directly to the streaming table input
+///
+/// Group-by aggregates are left unchanged.
+fn force_aggregate_mode(
+    plan: Arc<dyn datafusion::physical_plan::ExecutionPlan>,
+    target_mode: datafusion::physical_plan::aggregates::AggregateMode,
+) -> Result<Arc<dyn datafusion::physical_plan::ExecutionPlan>, DataFusionError> {
+    use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
+
+    if let Some(agg) = plan.as_any().downcast_ref::<AggregateExec>() {
+        if agg.group_expr().is_empty() {
+            match target_mode {
+                AggregateMode::Partial => {
+                    if matches!(agg.mode(), AggregateMode::Final | AggregateMode::FinalPartitioned) {
+                        return force_aggregate_mode(Arc::clone(agg.input()), target_mode);
+                    }
+                    if matches!(agg.mode(), AggregateMode::Single | AggregateMode::SinglePartitioned) {
+                        let partial = AggregateExec::try_new(
+                            AggregateMode::Partial,
+                            agg.group_expr().clone(),
+                            agg.aggr_expr().to_vec(),
+                            agg.filter_expr().to_vec(),
+                            Arc::clone(agg.input()),
+                            agg.input_schema().clone(),
+                        )?;
+                        return Ok(Arc::new(partial));
+                    }
+                }
+                AggregateMode::Final => {
+                    if matches!(agg.mode(), AggregateMode::Final | AggregateMode::FinalPartitioned) {
+                        if let Some(partial_input) = find_partial_input(agg.input()) {
+                            let coalesced = Arc::new(
+                                datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec::new(partial_input),
+                            );
+                            return Ok(plan.with_new_children(vec![coalesced])?);
+                        }
+                    }
+                    if matches!(agg.mode(), AggregateMode::Single | AggregateMode::SinglePartitioned) {
+                        let coalesced = Arc::new(
+                            datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec::new(Arc::clone(agg.input())),
+                        );
+                        return Ok(plan.with_new_children(vec![coalesced])?);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let new_children: datafusion_common::Result<Vec<_>> = plan
+        .children()
+        .into_iter()
+        .map(|c| force_aggregate_mode(Arc::clone(c), target_mode))
+        .collect();
+    plan.with_new_children(new_children?)
+}
+
+/// Walks through single-child passthrough nodes to find a Partial AggregateExec, returns its input.
+fn find_partial_input(
+    plan: &Arc<dyn datafusion::physical_plan::ExecutionPlan>,
+) -> Option<Arc<dyn datafusion::physical_plan::ExecutionPlan>> {
+    use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
+    if let Some(agg) = plan.as_any().downcast_ref::<AggregateExec>() {
+        if matches!(agg.mode(), AggregateMode::Partial) {
+            return Some(Arc::clone(agg.input()));
+        }
+    }
+    if plan.children().len() == 1 {
+        return find_partial_input(plan.children()[0]);
+    }
+    None
 }

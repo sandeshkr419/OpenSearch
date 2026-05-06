@@ -253,23 +253,33 @@ pub unsafe extern "C" fn df_execute_local_plan(
     substrait_ptr: *const u8,
     substrait_len: i64,
 ) -> i64 {
+    execute_local_plan_mode(session_ptr, substrait_ptr, substrait_len, 0)
+}
+
+#[ffm_safe]
+#[no_mangle]
+pub unsafe extern "C" fn df_execute_local_plan_final(
+    session_ptr: i64,
+    substrait_ptr: *const u8,
+    substrait_len: i64,
+) -> i64 {
+    execute_local_plan_mode(session_ptr, substrait_ptr, substrait_len, 2)
+}
+
+unsafe fn execute_local_plan_mode(
+    session_ptr: i64,
+    substrait_ptr: *const u8,
+    substrait_len: i64,
+    mode: i32,
+) -> Result<i64, String> {
     let mgr = get_rt_manager()?;
-    // Copy substrait bytes into an owned Vec so the spawned future can move them
-    // (cpu_executor.spawn requires 'static). Clone the manager Arc twice — once for
-    // the inner future to access the runtime env / etc., once for the outer block_on
-    // closure to call `cpu_executor().spawn`.
     let bytes_vec = slice::from_raw_parts(substrait_ptr, substrait_len as usize).to_vec();
     let mgr_for_inner = Arc::clone(&mgr);
     let mgr_for_spawn = Arc::clone(&mgr);
-    // Wrap plan setup in cpu_executor.spawn so internal DataFusion spawns
-    // (RepartitionExec drain, CoalescePartitionsExec, etc.) inherit the CPU executor
-    // instead of the IO runtime. Without this, operator hash work runs on IO workers.
-    // The IO runtime still drives the outer block_on (bridging the synchronous FFI
-    // call to the async spawn handle).
     mgr.io_runtime
         .block_on(async move {
             let inner_fut = async move {
-                unsafe { api::execute_local_plan(session_ptr, &bytes_vec, &mgr_for_inner, 0).await }
+                unsafe { api::execute_local_plan(session_ptr, &bytes_vec, &mgr_for_inner, 0, mode).await }
             };
             match mgr_for_spawn.cpu_executor().spawn(inner_fut).await {
                 Ok(inner_result) => inner_result,
@@ -562,6 +572,35 @@ pub unsafe extern "C" fn df_execute_with_context(
     plan_ptr: *const u8,
     plan_len: i64,
 ) -> i64 {
+    execute_with_context_mode(session_ctx_ptr, plan_ptr, plan_len, 0)
+}
+
+#[ffm_safe]
+#[no_mangle]
+pub unsafe extern "C" fn df_execute_with_context_partial(
+    session_ctx_ptr: i64,
+    plan_ptr: *const u8,
+    plan_len: i64,
+) -> i64 {
+    execute_with_context_mode(session_ctx_ptr, plan_ptr, plan_len, 1)
+}
+
+#[ffm_safe]
+#[no_mangle]
+pub unsafe extern "C" fn df_execute_with_context_final(
+    session_ctx_ptr: i64,
+    plan_ptr: *const u8,
+    plan_len: i64,
+) -> i64 {
+    execute_with_context_mode(session_ctx_ptr, plan_ptr, plan_len, 2)
+}
+
+unsafe fn execute_with_context_mode(
+    session_ctx_ptr: i64,
+    plan_ptr: *const u8,
+    plan_len: i64,
+    mode: i32,
+) -> Result<i64, String> {
     let mgr = get_rt_manager()?;
     let plan_bytes = slice::from_raw_parts(plan_ptr, plan_len as usize);
     let cpu_executor = mgr.cpu_executor();
@@ -570,6 +609,7 @@ pub unsafe extern "C" fn df_execute_with_context(
             session_ctx_ptr,
             plan_bytes,
             cpu_executor,
+            mode,
         ))
         .map_err(|e| e.to_string())
 }

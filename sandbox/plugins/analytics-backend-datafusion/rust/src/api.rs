@@ -504,6 +504,7 @@ pub async unsafe fn execute_local_plan(
     substrait_bytes: &[u8],
     manager: &RuntimeManager,
     context_id: i64,
+    mode: i32,
 ) -> Result<i64, DataFusionError> {
     let session = &*(session_ptr as *const LocalSession);
 
@@ -511,7 +512,7 @@ pub async unsafe fn execute_local_plan(
     // `context_id` of 0 disables tracking (pool is not consulted).
     let query_context = QueryTrackingContext::new(context_id, session.memory_pool());
 
-    let df_stream = session.execute_substrait(substrait_bytes).await?;
+    let df_stream = session.execute_substrait_with_mode(substrait_bytes, mode).await?;
 
     // Wrap the output in the same CrossRtStream + RecordBatchStreamAdapter
     // shape as `execute_query`, so existing `stream_next` / `stream_close`

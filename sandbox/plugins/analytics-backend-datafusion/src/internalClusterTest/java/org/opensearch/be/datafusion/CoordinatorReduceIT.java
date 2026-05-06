@@ -129,6 +129,28 @@ public class CoordinatorReduceIT extends OpenSearchIntegTestCase {
     }
 
     private void createParquetBackedIndex() {
+        createParquetBackedIndex(INDEX);
+    }
+
+    private void indexDeterministicDocs() {
+        int total = NUM_SHARDS * DOCS_PER_SHARD;
+        for (int i = 0; i < total; i++) {
+            client().prepareIndex(INDEX).setId(String.valueOf(i)).setSource("value", VALUE).get();
+        }
+        client().admin().indices().prepareRefresh(INDEX).get();
+        client().admin().indices().prepareFlush(INDEX).get();
+    }
+
+    private void indexVaryingDocs(String indexName) {
+        int total = NUM_SHARDS * DOCS_PER_SHARD;
+        for (int i = 0; i < total; i++) {
+            client().prepareIndex(indexName).setId("v" + i).setSource("value", i + 1).get();
+        }
+        client().admin().indices().prepareRefresh(indexName).get();
+        client().admin().indices().prepareFlush(indexName).get();
+    }
+
+    private void createParquetBackedIndex(String indexName) {
         Settings indexSettings = Settings.builder()
             .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, NUM_SHARDS)
             .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 0)
@@ -140,21 +162,54 @@ public class CoordinatorReduceIT extends OpenSearchIntegTestCase {
 
         CreateIndexResponse response = client().admin()
             .indices()
-            .prepareCreate(INDEX)
+            .prepareCreate(indexName)
             .setSettings(indexSettings)
             .setMapping("value", "type=integer")
             .get();
         assertTrue("index creation must be acknowledged", response.isAcknowledged());
-        ensureGreen(INDEX);
+        ensureGreen(indexName);
     }
 
-    private void indexDeterministicDocs() {
-        int total = NUM_SHARDS * DOCS_PER_SHARD;
-        for (int i = 0; i < total; i++) {
-            client().prepareIndex(INDEX).setId(String.valueOf(i)).setSource("value", VALUE).get();
-        }
-        client().admin().indices().prepareRefresh(INDEX).get();
-        client().admin().indices().prepareFlush(INDEX).get();
+    /**
+     * Tests AVG across shards using the decomposition path (SUM+COUNT partial, SUM/COUNT final).
+     */
+    public void testAvgAcrossShards() throws Exception {
+        createParquetBackedIndex();
+        indexDeterministicDocs();
+
+        PPLResponse response = executePPL("source = " + INDEX + " | stats avg(value) as a");
+
+        assertNotNull("PPLResponse must not be null", response);
+        assertTrue("columns must contain 'a', got " + response.getColumns(), response.getColumns().contains("a"));
+        assertEquals("scalar agg must return exactly 1 row", 1, response.getRows().size());
+
+        int idx = response.getColumns().indexOf("a");
+        Object cell = response.getRows().get(0)[idx];
+        assertNotNull("AVG(value) cell must not be null", cell);
+        double actual = ((Number) cell).doubleValue();
+        assertEquals("AVG(value) across shards should be " + VALUE, (double) VALUE, actual, 0.001);
+    }
+
+    /**
+     * Tests approximate distinct count (HLL) across shards.
+     */
+    public void testDistinctCountAcrossShards() throws Exception {
+        String index = "coord_reduce_dc";
+        createParquetBackedIndex(index);
+        indexVaryingDocs(index);
+
+        PPLResponse response = executePPL("source = " + index + " | stats dc(value) as dc");
+
+        assertNotNull("PPLResponse must not be null", response);
+        assertEquals("scalar agg must return exactly 1 row", 1, response.getRows().size());
+
+        long actual = ((Number) response.getRows().get(0)[0]).longValue();
+        int totalDocs = NUM_SHARDS * DOCS_PER_SHARD;
+        // HLL is approximate — allow 10% deviation
+        assertTrue(
+            "dc(value) should be approximately " + totalDocs + ", got " + actual,
+            actual >= totalDocs * 0.9 && actual <= totalDocs * 1.1
+        );
     }
 
     private PPLResponse executePPL(String ppl) {

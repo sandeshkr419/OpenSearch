@@ -12,38 +12,31 @@ import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.plan.RelOptRuleCall;
 import org.apache.calcite.plan.RelTraitSet;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.core.AggregateCall;
+import org.apache.calcite.rel.type.RelDataType;
+import org.apache.calcite.rex.RexBuilder;
+import org.apache.calcite.rex.RexNode;
 import org.opensearch.analytics.planner.PlannerContext;
 import org.opensearch.analytics.planner.rel.AggregateMode;
 import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
 import org.opensearch.analytics.planner.rel.OpenSearchConvention;
+import org.opensearch.analytics.planner.rel.OpenSearchProject;
+import org.opensearch.analytics.spi.AggregateDecomposition;
+import org.opensearch.analytics.spi.AggregateFunction;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Volcano CBO rule that splits an {@link OpenSearchAggregate} into
  * PARTIAL + FINAL when the input is partitioned.
  *
  * <p>Requests SINGLETON distribution on the partial output, letting Volcano's
- * trait enforcement (via {@code ExpandConversionRule} + {@code OpenSearchDistributionTraitDef})
- * automatically insert an {@code OpenSearchExchangeReducer}.
+ * trait enforcement insert an {@code OpenSearchExchangeReducer}.
  *
- * <p>TODO (plan forking): aggregate decomposition is intentionally deferred to plan forking
- * resolution, after a single backend has been chosen per alternative. Decomposition is
- * backend-specific — different backends may emit different partial state schemas for the
- * same function (e.g. standard SUM+COUNT for AVG vs a backend's native running state).
- * Applying decomposition here would force a single schema before backends are resolved,
- * which breaks the multi-alternative model.
- *
- * <p>During plan forking resolution, for each PARTIAL+FINAL pair in a chosen-backend alternative:
- * <ol>
- *   <li>Look up {@link org.opensearch.analytics.spi.AggregateCapability#decomposition()} for
- *       each AggregateCall using the chosen backend.</li>
- *   <li>If null: apply Calcite's {@code AggregateReduceFunctionsRule} to rewrite
- *       AVG → SUM/COUNT, STDDEV → SUM(x²)+SUM(x)+COUNT, etc.</li>
- *   <li>If non-null: use {@link org.opensearch.analytics.spi.AggregateDecomposition#partialCalls()}
- *       to rewrite PARTIAL's aggCalls and output row type, and
- *       {@code AggregateDecomposition.finalExpression()} to
- *       rewrite FINAL's aggCalls. Both must be updated together — the exchange row type
- *       between them must be consistent within the same plan alternative.</li>
- * </ol>
+ * <p>Uses {@link AggregateDecomposition} from the backend's capability to expand
+ * partial calls and build the final expression (e.g. AVG → SUM+COUNT partial,
+ * sum/count final).
  *
  * @opensearch.internal
  */
@@ -66,8 +59,29 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
     public void onMatch(RelOptRuleCall call) {
         OpenSearchAggregate aggregate = call.rel(0);
         RelNode child = call.rel(1);
+        RexBuilder rexBuilder = aggregate.getCluster().getRexBuilder();
 
-        // Partial aggregate: runs on each partition, keeps input's traits
+        String backend = aggregate.getViableBackends().getFirst();
+
+        // Build PARTIAL aggCalls, expanding any decomposed functions.
+        List<AggregateCall> partialCalls = new ArrayList<>();
+        List<AggregateDecomposition> decompositions = new ArrayList<>();
+        List<Integer> partialStartIndex = new ArrayList<>();
+
+        for (AggregateCall origCall : aggregate.getAggCallList()) {
+            AggregateFunction func = AggregateFunction.fromAggregateCall(origCall);
+            AggregateDecomposition decomp = func != null ? context.getCapabilityRegistry().getDecomposition(backend, func) : null;
+            partialStartIndex.add(partialCalls.size());
+            if (decomp != null) {
+                decompositions.add(decomp);
+                partialCalls.addAll(decomp.partialCalls(origCall, child));
+            } else {
+                decompositions.add(null);
+                partialCalls.add(origCall);
+            }
+        }
+
+        // Partial aggregate: runs on each shard
         RelTraitSet partialTraits = child.getTraitSet().replace(OpenSearchConvention.INSTANCE);
         OpenSearchAggregate partial = new OpenSearchAggregate(
             aggregate.getCluster(),
@@ -75,7 +89,7 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
             child,
             aggregate.getGroupSet(),
             aggregate.getGroupSets(),
-            aggregate.getAggCallList(),
+            partialCalls,
             AggregateMode.PARTIAL,
             aggregate.getViableBackends()
         );
@@ -84,18 +98,69 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
         RelTraitSet singletonTraits = partial.getTraitSet().replace(context.getDistributionTraitDef().singleton());
         RelNode gathered = convert(partial, singletonTraits);
 
-        // Final aggregate: merges partial states at coordinator
+        int groupCount = aggregate.getGroupSet().cardinality();
+
+        // FINAL aggCalls: remap each partial call to reference its column in gathered output
+        List<AggregateCall> finalAggCalls = new ArrayList<>();
+        for (int pi = 0; pi < partialCalls.size(); pi++) {
+            AggregateCall pc = partialCalls.get(pi);
+            finalAggCalls.add(pc.adaptTo(gathered, List.of(groupCount + pi), pc.filterArg, groupCount, aggregate.getGroupCount()));
+        }
         OpenSearchAggregate finalAggregate = new OpenSearchAggregate(
             aggregate.getCluster(),
             singletonTraits,
             gathered,
             aggregate.getGroupSet(),
             aggregate.getGroupSets(),
-            aggregate.getAggCallList(),
+            finalAggCalls,
             AggregateMode.FINAL,
             aggregate.getViableBackends()
         );
 
-        call.transformTo(finalAggregate);
+        // If no decompositions, the final aggregate is the result directly
+        if (decompositions.stream().allMatch(d -> d == null)) {
+            call.transformTo(finalAggregate);
+            return;
+        }
+
+        // With decomposition: wrap FINAL in a Project applying finalExpression() per original call
+        List<RexNode> projectExprs = new ArrayList<>();
+        List<String> projectNames = new ArrayList<>();
+        for (int i = 0; i < groupCount; i++) {
+            projectExprs.add(rexBuilder.makeInputRef(finalAggregate, i));
+            projectNames.add(finalAggregate.getRowType().getFieldList().get(i).getName());
+        }
+        for (int i = 0; i < aggregate.getAggCallList().size(); i++) {
+            AggregateCall origCall = aggregate.getAggCallList().get(i);
+            AggregateDecomposition decomp = decompositions.get(i);
+            int startIdx = partialStartIndex.get(i);
+            int endIdx = (i + 1 < partialStartIndex.size()) ? partialStartIndex.get(i + 1) : partialCalls.size();
+            if (decomp != null) {
+                List<RexNode> partialRefs = new ArrayList<>();
+                for (int pi = startIdx; pi < endIdx; pi++) {
+                    partialRefs.add(rexBuilder.makeInputRef(finalAggregate, groupCount + pi));
+                }
+                RexNode expr = decomp.finalExpression(rexBuilder, partialRefs);
+                // Cast to match the original aggregate's output type (preserves nullability)
+                RelDataType origType = aggregate.getRowType().getFieldList().get(groupCount + i).getType();
+                if (!expr.getType().equals(origType)) {
+                    expr = rexBuilder.makeCast(origType, expr);
+                }
+                projectExprs.add(expr);
+            } else {
+                projectExprs.add(rexBuilder.makeInputRef(finalAggregate, groupCount + startIdx));
+            }
+            projectNames.add(origCall.name != null ? origCall.name : "expr$" + i);
+        }
+        call.transformTo(
+            new OpenSearchProject(
+                aggregate.getCluster(),
+                singletonTraits,
+                finalAggregate,
+                projectExprs,
+                aggregate.getRowType(),
+                aggregate.getViableBackends()
+            )
+        );
     }
 }

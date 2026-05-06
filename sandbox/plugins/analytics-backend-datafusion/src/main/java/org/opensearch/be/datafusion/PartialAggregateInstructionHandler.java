@@ -11,26 +11,22 @@ package org.opensearch.be.datafusion;
 import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.opensearch.analytics.spi.BackendExecutionContext;
 import org.opensearch.analytics.spi.CommonExecutionContext;
-import org.opensearch.analytics.spi.FinalAggregateInstructionNode;
 import org.opensearch.analytics.spi.FragmentInstructionHandler;
+import org.opensearch.analytics.spi.PartialAggregateInstructionNode;
 
 /**
- * Handles FinalAggregate instruction for coordinator-reduce stages.
- * Sets mode=FINAL so the Rust executor merges partial state.
+ * Handles PartialAggregate instruction: sets mode=PARTIAL on the session state
+ * so the Rust executor emits intermediate aggregate state instead of final results.
  */
-public class FinalAggregateInstructionHandler implements FragmentInstructionHandler<FinalAggregateInstructionNode> {
+public class PartialAggregateInstructionHandler implements FragmentInstructionHandler<PartialAggregateInstructionNode> {
 
     @Override
     public BackendExecutionContext apply(
-        FinalAggregateInstructionNode node,
+        PartialAggregateInstructionNode node,
         CommonExecutionContext commonContext,
         BackendExecutionContext backendContext
     ) {
-        // For coordinator-reduce path, backendContext may be null (no ShardScan handler ran).
-        if (backendContext == null) {
-            return new DataFusionSessionState(null, AggregateExecutionMode.FINAL);
-        }
         DataFusionSessionState prev = (DataFusionSessionState) backendContext;
-        return new DataFusionSessionState(prev.sessionContextHandle(), AggregateExecutionMode.FINAL);
+        return new DataFusionSessionState(prev.sessionContextHandle(), AggregateExecutionMode.PARTIAL);
     }
 }

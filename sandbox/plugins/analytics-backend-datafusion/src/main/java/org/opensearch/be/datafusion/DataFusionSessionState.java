@@ -8,12 +8,23 @@
 
 package org.opensearch.be.datafusion;
 
+import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.opensearch.analytics.spi.BackendExecutionContext;
 import org.opensearch.be.datafusion.nativelib.SessionContextHandle;
 
 /**
- * Backend-specific execution context produced by ShardScanInstructionHandler,
+ * Backend-specific execution context produced by instruction handlers,
  * consumed by DatafusionSearcher at execute time.
+ *
+ * @param sessionContextHandle native session context (null for coordinator-reduce path)
+ * @param mode aggregate execution mode
  */
-public record DataFusionSessionState(SessionContextHandle sessionContextHandle) implements BackendExecutionContext {
+public record DataFusionSessionState(SessionContextHandle sessionContextHandle, AggregateExecutionMode mode)
+    implements
+        BackendExecutionContext {
+
+    /** Default mode constructor for backward compatibility. */
+    public DataFusionSessionState(SessionContextHandle sessionContextHandle) {
+        this(sessionContextHandle, AggregateExecutionMode.DEFAULT);
+    }
 }
