@@ -69,6 +69,7 @@ impl LocalSession {
             .with_config(SessionConfig::new())
             .with_runtime_env(runtime_env)
             .with_default_features()
+            .with_physical_optimizer_rules(crate::agg_mode::physical_optimizer_rules_without_combine())
             .build();
         let ctx = SessionContext::new_with_state(state);
         crate::udf::register_all(&ctx);
@@ -137,15 +138,28 @@ impl LocalSession {
         &self,
         bytes: &[u8],
     ) -> Result<SendableRecordBatchStream, DataFusionError> {
+        self.execute_substrait_with_mode(bytes, 0).await
+    }
+
+    /// Executes a Substrait plan with optional aggregate mode forcing.
+    /// `mode`: 0 = default, 1 = partial, 2 = final.
+    pub async fn execute_substrait_with_mode(
+        &self,
+        bytes: &[u8],
+        mode: i32,
+    ) -> Result<SendableRecordBatchStream, DataFusionError> {
         let plan = Plan::decode(bytes).map_err(|e| {
             DataFusionError::Execution(format!("Failed to decode Substrait plan: {}", e))
         })?;
         let logical_plan = from_substrait_plan(&self.ctx.state(), &plan).await?;
-        self.ctx
-            .execute_logical_plan(logical_plan)
-            .await?
-            .execute_stream()
-            .await
+        let df = self.ctx.execute_logical_plan(logical_plan).await?;
+        if mode == 0 {
+            return df.execute_stream().await;
+        }
+        let physical_plan = df.create_physical_plan().await?;
+        let physical_plan = crate::agg_mode::apply_aggregate_mode(physical_plan, mode)?;
+        let task_ctx = self.ctx.task_ctx();
+        datafusion::physical_plan::execute_stream(physical_plan, task_ctx)
     }
 
     /// Returns the memory pool the session's `RuntimeEnv` was built with.

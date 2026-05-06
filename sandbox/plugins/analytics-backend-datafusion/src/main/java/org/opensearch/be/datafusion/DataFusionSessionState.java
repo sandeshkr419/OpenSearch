@@ -8,25 +8,23 @@
 
 package org.opensearch.be.datafusion;
 
+import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.opensearch.analytics.spi.BackendExecutionContext;
 import org.opensearch.be.datafusion.nativelib.SessionContextHandle;
 
 /**
- * Backend-specific execution context produced by {@link ShardScanInstructionHandler},
- * consumed by {@link DatafusionSearcher} at execute time.
+ * Backend-specific execution context produced by instruction handlers,
+ * consumed by DatafusionSearcher at execute time.
  *
- * <p>{@link #close()} closes the underlying {@link SessionContextHandle} as the
- * fragment-orchestrator's safety net for error paths that never reach the execute step.
- * The handle's close is idempotent and cooperates with {@link DatafusionContext#close()}
- * (which also closes it once the handle is handed off to an engine), so it is safe to call
- * from both places — whichever runs first wins.
+ * @param sessionContextHandle native session context (null for coordinator-reduce path)
+ * @param mode aggregate execution mode
  */
-public record DataFusionSessionState(SessionContextHandle sessionContextHandle) implements BackendExecutionContext {
+public record DataFusionSessionState(SessionContextHandle sessionContextHandle, AggregateExecutionMode mode)
+    implements
+        BackendExecutionContext {
 
-    @Override
-    public void close() {
-        if (sessionContextHandle != null) {
-            sessionContextHandle.close();
-        }
+    /** Default mode constructor for backward compatibility. */
+    public DataFusionSessionState(SessionContextHandle sessionContextHandle) {
+        this(sessionContextHandle, AggregateExecutionMode.DEFAULT);
     }
 }

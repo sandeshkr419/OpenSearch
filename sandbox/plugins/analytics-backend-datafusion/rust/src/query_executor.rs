@@ -156,23 +156,26 @@ pub async fn execute_query(
 }
 
 /// Executes a Substrait plan against a pre-configured SessionContext.
+/// Consumes the handle — SessionContext lifetime is tied to the returned stream.
 ///
-/// Takes ownership of the handle by value. The ownership transfer (consuming the
-/// raw Java pointer) happens at the FFM entry in `df_execute_with_context`, so
-/// by the time this function is reached the pointer is already invalidated from
-/// Java's perspective and cleanup is pure RAII.
-pub async fn execute_with_context(
-    handle: SessionContextHandle,
+/// `mode`: 0 = default (no forcing), 1 = partial, 2 = final.
+pub async unsafe fn execute_with_context(
+    session_ctx_ptr: i64,
     plan_bytes: &[u8],
     cpu_executor: DedicatedExecutor,
+    mode: i32,
 ) -> Result<i64, DataFusionError> {
+    let handle = *Box::from_raw(session_ctx_ptr as *mut SessionContextHandle);
+
     let substrait_plan = Plan::decode(plan_bytes).map_err(|e| {
         DataFusionError::Execution(format!("Failed to decode Substrait: {}", e))
     })?;
 
     let logical_plan = from_substrait_plan(&handle.ctx.state(), &substrait_plan).await?;
     let dataframe = handle.ctx.execute_logical_plan(logical_plan).await?;
-    let physical_plan = dataframe.create_physical_plan().await?;
+    let mut physical_plan = dataframe.create_physical_plan().await?;
+
+    physical_plan = crate::agg_mode::apply_aggregate_mode(physical_plan, mode)?;
 
     let df_stream = execute_stream(physical_plan, handle.ctx.task_ctx()).map_err(|e| {
         error!("execute_with_context: failed to create stream: {}", e);
@@ -188,3 +191,5 @@ pub async fn execute_with_context(
     let stream_handle = crate::api::QueryStreamHandle::new(wrapped, handle.query_context);
     Ok(Box::into_raw(Box::new(stream_handle)) as i64)
 }
+
+// Aggregate mode forcing is in crate::agg_mode

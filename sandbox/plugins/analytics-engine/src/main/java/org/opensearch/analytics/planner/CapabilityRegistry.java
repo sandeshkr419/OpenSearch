@@ -8,6 +8,9 @@
 
 package org.opensearch.analytics.planner;
 
+import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.calcite.rex.RexBuilder;
+import org.apache.calcite.rex.RexNode;
 import org.opensearch.analytics.spi.AggregateCapability;
 import org.opensearch.analytics.spi.AggregateFunction;
 import org.opensearch.analytics.spi.AnalyticsSearchBackendPlugin;
@@ -21,6 +24,7 @@ import org.opensearch.analytics.spi.ProjectCapability;
 import org.opensearch.analytics.spi.ScalarFunction;
 import org.opensearch.analytics.spi.ScanCapability;
 import org.opensearch.cluster.metadata.IndexMetadata;
+import org.opensearch.common.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -28,6 +32,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /**
@@ -74,6 +79,10 @@ public class CapabilityRegistry {
     private final Map<FullTextParamKey, Set<String>> fullTextParamIndex = new HashMap<>();
 
     private final Function<IndexMetadata, FieldStorageResolver> fieldStorageFactory;
+
+    // Intermediate fields and final expression indexes: (backendName, AggregateFunction) → partial state
+    private final Map<DecompositionKey, List<Field>> intermediateFieldsIndex = new HashMap<>();
+    private final Map<DecompositionKey, BiFunction<RexBuilder, List<RexNode>, RexNode>> finalExpressionIndex = new HashMap<>();
 
     // Backends that declared any capability for each operator — O(1) membership check
     private final Set<String> scanCapableBackends = new HashSet<>();
@@ -146,6 +155,12 @@ public class CapabilityRegistry {
             for (AggregateCapability cap : caps.aggregateCapabilities()) {
                 for (FieldType fieldType : cap.fieldTypes()) {
                     addToFormatMap(aggregateIndex, new AggregateKey(cap.function(), fieldType), cap.formats(), name);
+                }
+                if (cap.intermediateFields() != null) {
+                    intermediateFieldsIndex.put(new DecompositionKey(name, cap.function()), cap.intermediateFields());
+                }
+                if (cap.finalExpression() != null) {
+                    finalExpressionIndex.put(new DecompositionKey(name, cap.function()), cap.finalExpression());
                 }
                 aggregateCapableBackends.add(name);
             }
@@ -348,5 +363,20 @@ public class CapabilityRegistry {
     }
 
     private record FullTextParamKey(ScalarFunction function, FieldType fieldType, String backendName) {
+    }
+
+    private record DecompositionKey(String backendName, AggregateFunction function) {
+    }
+
+    // ---- Intermediate fields lookups ----
+
+    @Nullable
+    public List<Field> getIntermediateFields(String backendName, AggregateFunction function) {
+        return intermediateFieldsIndex.get(new DecompositionKey(backendName, function));
+    }
+
+    @Nullable
+    public BiFunction<RexBuilder, List<RexNode>, RexNode> getFinalExpression(String backendName, AggregateFunction function) {
+        return finalExpressionIndex.get(new DecompositionKey(backendName, function));
     }
 }

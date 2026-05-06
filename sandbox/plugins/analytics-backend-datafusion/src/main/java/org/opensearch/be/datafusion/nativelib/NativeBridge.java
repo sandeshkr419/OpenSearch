@@ -8,6 +8,7 @@
 
 package org.opensearch.be.datafusion.nativelib;
 
+import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.opensearch.analytics.backend.jni.NativeHandle;
 import org.opensearch.core.action.ActionListener;
 import org.opensearch.nativebridge.spi.NativeCall;
@@ -59,6 +60,7 @@ public final class NativeBridge {
     private static final MethodHandle CLOSE_LOCAL_SESSION;
     private static final MethodHandle REGISTER_PARTITION_STREAM;
     private static final MethodHandle EXECUTE_LOCAL_PLAN;
+    private static final MethodHandle EXECUTE_LOCAL_PLAN_FINAL;
     private static final MethodHandle SENDER_SEND;
     private static final MethodHandle SENDER_CLOSE;
     private static final MethodHandle REGISTER_MEMTABLE;
@@ -75,7 +77,8 @@ public final class NativeBridge {
     private static final MethodHandle CREATE_SESSION_CONTEXT;
     private static final MethodHandle CLOSE_SESSION_CONTEXT;
     private static final MethodHandle EXECUTE_WITH_CONTEXT;
-    private static final MethodHandle CANCEL_QUERY;
+    private static final MethodHandle EXECUTE_WITH_CONTEXT_PARTIAL;
+    private static final MethodHandle EXECUTE_WITH_CONTEXT_FINAL;
 
     static {
         SymbolLookup lib = NativeLibraryLoader.symbolLookup();
@@ -213,6 +216,11 @@ public final class NativeBridge {
             FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG)
         );
 
+        EXECUTE_LOCAL_PLAN_FINAL = linker.downcallHandle(
+            lib.find("df_execute_local_plan_final").orElseThrow(),
+            FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG)
+        );
+
         // i64 df_sender_send(sender_ptr, array_ptr, schema_ptr)
         SENDER_SEND = linker.downcallHandle(
             lib.find("df_sender_send").orElseThrow(),
@@ -345,8 +353,6 @@ public final class NativeBridge {
             )
         );
 
-        CANCEL_QUERY = linker.downcallHandle(lib.find("df_cancel_query").orElseThrow(), FunctionDescriptor.ofVoid(ValueLayout.JAVA_LONG));
-
         // Hand the five filter-tree upcall stubs to Rust now. No explicit
         // caller step required — as soon as this class is loaded, callbacks
         // are installed and `df_execute_indexed_query` can dispatch into Java.
@@ -359,6 +365,16 @@ public final class NativeBridge {
 
         EXECUTE_WITH_CONTEXT = linker.downcallHandle(
             lib.find("df_execute_with_context").orElseThrow(),
+            FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG)
+        );
+
+        EXECUTE_WITH_CONTEXT_PARTIAL = linker.downcallHandle(
+            lib.find("df_execute_with_context_partial").orElseThrow(),
+            FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG)
+        );
+
+        EXECUTE_WITH_CONTEXT_FINAL = linker.downcallHandle(
+            lib.find("df_execute_with_context_final").orElseThrow(),
             FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG)
         );
     }
@@ -588,13 +604,6 @@ public final class NativeBridge {
         NativeCall.invokeVoid(STREAM_CLOSE, streamPtr);
     }
 
-    // ---- Cancellation ----
-
-    /** Fires the cancellation token for the given context. No-op if already completed. */
-    public static void cancelQuery(long contextId) {
-        NativeCall.invokeVoid(CANCEL_QUERY, contextId);
-    }
-
     // ---- Stubs ----
 
     public static byte[] sqlToSubstrait(long readerPtr, String tableName, String sql, long runtimePtr) {
@@ -661,10 +670,18 @@ public final class NativeBridge {
      * Executes a Substrait plan on the session, returning an opaque stream pointer. The stream is
      * drained via {@link #streamNext} and freed by {@link #streamClose}.
      */
-    public static long executeLocalPlan(long sessionPtr, byte[] substrait) {
+    /**
+     * Executes a Substrait plan on the local session with the given aggregate execution mode.
+     * Returns an opaque stream pointer drained via {@link #streamNext} and freed by {@link #streamClose}.
+     */
+    public static long executeLocalPlan(long sessionPtr, byte[] substrait, AggregateExecutionMode mode) {
         NativeHandle.validatePointer(sessionPtr, "session");
+        MethodHandle handle = switch (mode) {
+            case FINAL -> EXECUTE_LOCAL_PLAN_FINAL;
+            default -> EXECUTE_LOCAL_PLAN;
+        };
         try (var call = new NativeCall()) {
-            return call.invoke(EXECUTE_LOCAL_PLAN, sessionPtr, call.bytes(substrait), (long) substrait.length);
+            return call.invoke(handle, sessionPtr, call.bytes(substrait), (long) substrait.length);
         }
     }
 
@@ -744,44 +761,32 @@ public final class NativeBridge {
     }
 
     /**
-     * Frees a native {@code SessionContext} handle. Invoked from
-     * {@link SessionContextHandle#doCloseNative()} ()} on error / never-executed paths; not called on the
-     * happy path where Rust's {@code execute_with_context} consumes the handle itself.
-     * Safe to call at most once per pointer.
+     * Executes a Substrait plan against the configured SessionContext.
+     * Consumes the session context handle (freed internally when stream closes).
      */
+    /** Frees a native SessionContext handle. Safe to call once. */
     public static void closeSessionContext(long ptr) {
         NativeCall.invokeVoid(CLOSE_SESSION_CONTEXT, ptr);
     }
 
     /**
-     * Executes a Substrait plan against the configured SessionContext.
-     *
-     * <p>Rust's {@code execute_with_context} takes ownership of the {@code SessionContext} via
-     * {@code Box::from_raw} on entry, regardless of whether the rest of the call then succeeds or
-     * returns an error. The handle is therefore marked consumed in a {@code finally} block so
-     * that both success and native-error paths skip {@code df_close_session_context} (which
-     * would otherwise double-free). Only a Java-side failure before the downcall dispatches
-     * (argument marshalling) leaves the handle unconsumed, in which case its
-     * {@link SessionContextHandle#doCloseNative()} ()} will free it.
+     * Executes a Substrait plan against the configured SessionContext with the given aggregate mode.
+     * Consumes the session context handle (freed internally when stream closes).
      */
-    public static void executeWithContextAsync(SessionContextHandle sessionContext, byte[] substraitPlan, ActionListener<Long> listener) {
-        final long sessionCtxPtr;
-        try {
-            sessionCtxPtr = sessionContext.getPointer();
-        } catch (Exception e) {
-            listener.onFailure(e);
-            return;
-        }
+    public static void executeWithContextAsync(
+        long sessionCtxPtr,
+        byte[] substraitPlan,
+        AggregateExecutionMode mode,
+        ActionListener<Long> listener
+    ) {
+        NativeHandle.validatePointer(sessionCtxPtr, "sessionContext");
+        MethodHandle handle = switch (mode) {
+            case PARTIAL -> EXECUTE_WITH_CONTEXT_PARTIAL;
+            case FINAL -> EXECUTE_WITH_CONTEXT_FINAL;
+            default -> EXECUTE_WITH_CONTEXT;
+        };
         try (var call = new NativeCall()) {
-            var plan = call.bytes(substraitPlan);
-            long planLen = (long) substraitPlan.length;
-            long result;
-            try {
-                result = call.invoke(EXECUTE_WITH_CONTEXT, sessionCtxPtr, plan, planLen);
-            } finally {
-                // Rust took ownership via Box::from_raw; do not let doClose() double-free.
-                sessionContext.markConsumed();
-            }
+            long result = call.invoke(handle, sessionCtxPtr, call.bytes(substraitPlan), (long) substraitPlan.length);
             listener.onResponse(result);
         } catch (Throwable throwable) {
             listener.onFailure(throwable instanceof Exception ? (Exception) throwable : new RuntimeException(throwable));

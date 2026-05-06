@@ -8,7 +8,7 @@
 
 package org.opensearch.be.datafusion;
 
-import org.opensearch.analytics.backend.jni.NativeHandle;
+import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.opensearch.be.datafusion.nativelib.NativeBridge;
 import org.opensearch.be.datafusion.nativelib.ReaderHandle;
 import org.opensearch.be.datafusion.nativelib.SessionContextHandle;
@@ -96,13 +96,8 @@ public class DataFusionNativeBridgeTests extends OpenSearchTestCase {
             "SELECT message FROM test_table",
             runtimeHandle.get()
         );
-        // Capture the pointer value BEFORE execute — after execute the handle is marked consumed
-        // (which closes the Java wrapper), so getPointer() would throw IllegalStateException.
-        long sessionCtxPtrBefore = sessionCtx.getPointer();
-        assertTrue("SessionContext pointer should be live before execute", NativeHandle.isLivePointer(sessionCtxPtrBefore));
-
         CompletableFuture<Long> future = new CompletableFuture<>();
-        NativeBridge.executeWithContextAsync(sessionCtx, substrait, new ActionListener<>() {
+        NativeBridge.executeWithContextAsync(sessionCtx.getPointer(), substrait, AggregateExecutionMode.DEFAULT, new ActionListener<>() {
             @Override
             public void onResponse(Long streamPtr) {
                 future.complete(streamPtr);
@@ -116,10 +111,8 @@ public class DataFusionNativeBridgeTests extends OpenSearchTestCase {
         long streamPtr = future.join();
         assertTrue("Stream pointer should be non-zero", streamPtr != 0);
 
-        // executeWithContextAsync marks the handle consumed (which closes the Java wrapper).
-        // Verify the pointer is no longer in the live registry and the wrapper rejects getPointer().
-        assertFalse("SessionContextHandle pointer must no longer be live after execute", NativeHandle.isLivePointer(sessionCtxPtrBefore));
-        expectThrows(IllegalStateException.class, sessionCtx::getPointer);
+        // Session context is consumed by execute — close the Java handle
+        sessionCtx.close();
 
         NativeBridge.streamClose(streamPtr);
         readerHandle.close();

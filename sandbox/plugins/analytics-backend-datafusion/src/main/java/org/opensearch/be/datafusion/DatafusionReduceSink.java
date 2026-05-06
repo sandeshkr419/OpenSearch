@@ -15,6 +15,7 @@ import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.opensearch.analytics.spi.ExchangeSink;
 import org.opensearch.analytics.spi.ExchangeSinkContext;
 import org.opensearch.analytics.spi.MultiInputExchangeSink;
@@ -98,7 +99,7 @@ public final class DatafusionReduceSink extends AbstractDatafusionReduceSink imp
                 long senderPtr = NativeBridge.registerPartitionStream(session.getPointer(), inputIdFor(childStageId), schemaIpc);
                 senders.put(childStageId, new DatafusionPartitionSender(senderPtr));
             }
-            streamPtr = NativeBridge.executeLocalPlan(session.getPointer(), ctx.fragmentBytes());
+            streamPtr = NativeBridge.executeLocalPlan(session.getPointer(), ctx.fragmentBytes(), AggregateExecutionMode.FINAL);
             this.outStream = new StreamHandle(streamPtr, runtimeHandle);
         } catch (RuntimeException e) {
             if (streamPtr != 0) {

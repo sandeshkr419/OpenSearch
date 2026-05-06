@@ -75,9 +75,12 @@ import io.substrait.relation.Sort;
  *
  * @opensearch.internal
  */
-public class DataFusionFragmentConvertor implements FragmentConvertor {
+public class DataFusionFragmentConvertor implements FragmentConvertor, org.opensearch.analytics.planner.RegistryAware {
 
     private static final Logger LOGGER = LogManager.getLogger(DataFusionFragmentConvertor.class);
+
+    /** Renames Substrait function names to match DataFusion's expected names. */
+    private static final java.util.Map<String, String> FUNCTION_RENAMES = java.util.Map.of("approx_count_distinct", "approx_distinct");
 
     /**
      * Maps backend-specific Calcite operators to their Substrait extension names so Isthmus
@@ -110,9 +113,17 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
     );
 
     private final SimpleExtension.ExtensionCollection extensions;
+    private org.opensearch.analytics.planner.CapabilityRegistry capabilityRegistry;
+    private String backendId;
 
     public DataFusionFragmentConvertor(SimpleExtension.ExtensionCollection extensions) {
         this.extensions = extensions;
+    }
+
+    @Override
+    public void setRegistry(org.opensearch.analytics.planner.CapabilityRegistry registry, String backendId) {
+        this.capabilityRegistry = registry;
+        this.backendId = backendId;
     }
 
     @Override
@@ -126,17 +137,15 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         LOGGER.debug("Attaching partial aggregate on top of {} inner bytes", innerBytes.length);
         Plan inner = decodePlan(innerBytes);
         Rel wrapper = convertStandalone(partialAggFragment);
-        Plan rewired = rewire(inner, withAggregationPhase(wrapper, Expression.AggregationPhase.INITIAL_TO_INTERMEDIATE));
+        Plan rewired = rewire(inner, wrapper);
         return serializePlan(rewired);
     }
 
     @Override
     public byte[] convertFinalAggFragment(RelNode fragment) {
         LOGGER.debug("Converting final-aggregate fragment");
-        // Rewrite any OpenSearchStageInputScan leaves to plain TableScan nodes so the
-        // isthmus visitor (which only knows about Calcite core / Logical RelNodes)
-        // emits a ReadRel with the stage-input-id as the named table.
-        RelNode rewritten = rewriteStageInputScans(fragment);
+        RelNode fixed = fixIntermediateInputTypes(fragment);
+        RelNode rewritten = rewriteStageInputScans(fixed);
         return convertToSubstrait(rewritten);
     }
 
@@ -168,6 +177,7 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         plan = SubstraitPlanRewriter.rewrite(plan);
 
         io.substrait.proto.Plan protoPlan = new PlanProtoConverter().toProto(plan);
+        protoPlan = renameExtensionFunctions(protoPlan);
         byte[] bytes = protoPlan.toByteArray();
         LOGGER.debug("Substrait plan: {} bytes", bytes.length);
         return bytes;
@@ -199,7 +209,30 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         Plan.Root innerRoot = inner.getRoots().get(0);
         Rel innerRel = innerRoot.getInput();
         Rel rewired = replaceInput(wrapper, innerRel);
-        return Plan.builder().addRoots(Plan.Root.builder().input(rewired).names(innerRoot.getNames()).build()).build();
+        return Plan.builder()
+            .addRoots(Plan.Root.builder().input(rewired).names(deriveNames(rewired, innerRoot.getNames())).build())
+            .build();
+    }
+
+    private static List<String> deriveNames(Rel rel, List<String> innerNames) {
+        if (rel instanceof Aggregate agg) {
+            List<String> names = new ArrayList<>();
+            for (io.substrait.expression.Expression expr : agg.getGroupings().stream().flatMap(g -> g.getExpressions().stream()).toList()) {
+                names.add("group_" + names.size());
+            }
+            for (Aggregate.Measure m : agg.getMeasures()) {
+                names.add("agg_" + names.size());
+            }
+            return names;
+        }
+        if (rel instanceof Project proj) {
+            List<String> names = new ArrayList<>();
+            for (int i = 0; i < proj.getExpressions().size(); i++) {
+                names.add("proj_" + i);
+            }
+            return names;
+        }
+        return innerNames;
     }
 
     private static Rel replaceInput(Rel wrapper, Rel newInput) {
@@ -260,6 +293,171 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
      * multi-input shapes (Union) each branch refers to its own child stage id and the
      * isthmus visitor emits one {@link NamedScan} per branch.
      */
+
+    /**
+     * Rewrites the StageInputScan row type to match the actual partial-state schema
+     * for aggregate calls with declared intermediateFields.
+     */
+    /**
+     * Fixes the StageInputScan row type so it matches the actual Arrow schema of the
+     * streaming table (which uses intermediateFields for approximate aggregates).
+     * The aggregate itself is unchanged — force_aggregate_mode(Final) in Rust handles merging.
+     */
+    private RelNode fixIntermediateInputTypes(RelNode node) {
+        if (!(node instanceof org.apache.calcite.rel.core.Aggregate agg)) {
+            if (node.getInputs().size() == 1) {
+                return node.copy(node.getTraitSet(), List.of(fixIntermediateInputTypes(node.getInputs().get(0))));
+            }
+            return node;
+        }
+        RelNode child = agg.getInput();
+        if (!(child instanceof OpenSearchStageInputScan scan)) return node;
+        if (capabilityRegistry == null || backendId == null) return node;
+
+        RelDataTypeFactory typeFactory = scan.getCluster().getTypeFactory();
+        org.apache.calcite.rex.RexBuilder rexBuilder = agg.getCluster().getRexBuilder();
+        int groupCount = agg.getGroupSet().cardinality();
+
+        List<String> scanNames = new ArrayList<>();
+        List<RelDataType> scanTypes = new ArrayList<>();
+        for (int i = 0; i < groupCount; i++) {
+            RelDataTypeField f = scan.getRowType().getFieldList().get(i);
+            scanNames.add(f.getName());
+            scanTypes.add(f.getType());
+        }
+
+        List<Integer> partialStart = new ArrayList<>();
+        List<
+            java.util.function.BiFunction<
+                org.apache.calcite.rex.RexBuilder,
+                List<org.apache.calcite.rex.RexNode>,
+                org.apache.calcite.rex.RexNode>> finalExprs = new ArrayList<>();
+        boolean needsRewrite = false;
+
+        for (int i = 0; i < agg.getAggCallList().size(); i++) {
+            org.apache.calcite.rel.core.AggregateCall call = agg.getAggCallList().get(i);
+            RelDataTypeField f = scan.getRowType().getFieldList().get(groupCount + i);
+            org.opensearch.analytics.spi.AggregateFunction func = org.opensearch.analytics.spi.AggregateFunction.fromAggregateCall(call);
+            List<org.apache.arrow.vector.types.pojo.Field> iFields = func != null
+                ? capabilityRegistry.getIntermediateFields(backendId, func)
+                : null;
+            partialStart.add(scanNames.size());
+            if (iFields != null) {
+                needsRewrite = true;
+                for (org.apache.arrow.vector.types.pojo.Field iField : iFields) {
+                    String suffix = iField.getName();
+                    scanNames.add(suffix.isEmpty() ? f.getName() : f.getName() + suffix);
+                    scanTypes.add(arrowTypeToCalcite(iField.getFieldType().getType(), typeFactory));
+                }
+                finalExprs.add(capabilityRegistry.getFinalExpression(backendId, func));
+            } else {
+                scanNames.add(f.getName());
+                scanTypes.add(f.getType());
+                finalExprs.add(null);
+            }
+        }
+        if (!needsRewrite) return node;
+
+        OpenSearchStageInputScan newScan = scan.withRowType(typeFactory.createStructType(scanTypes, scanNames));
+
+        List<org.apache.calcite.rel.core.AggregateCall> newAggCalls = new ArrayList<>();
+        for (int i = 0; i < agg.getAggCallList().size(); i++) {
+            org.apache.calcite.rel.core.AggregateCall call = agg.getAggCallList().get(i);
+            org.opensearch.analytics.spi.AggregateFunction func = org.opensearch.analytics.spi.AggregateFunction.fromAggregateCall(call);
+            List<org.apache.arrow.vector.types.pojo.Field> iFields = func != null
+                ? capabilityRegistry.getIntermediateFields(backendId, func)
+                : null;
+            int start = partialStart.get(i);
+            if (iFields != null && finalExprs.get(i) != null) {
+                for (int j = 0; j < iFields.size(); j++) {
+                    RelDataType colType = typeFactory.createTypeWithNullability(scanTypes.get(start + j), true);
+                    newAggCalls.add(
+                        org.apache.calcite.rel.core.AggregateCall.create(
+                            io.substrait.isthmus.AggregateFunctions.SUM,
+                            false,
+                            false,
+                            false,
+                            List.of(),
+                            List.of(start + j),
+                            -1,
+                            null,
+                            org.apache.calcite.rel.RelCollations.EMPTY,
+                            colType,
+                            scanNames.get(start + j)
+                        )
+                    );
+                }
+            } else {
+                newAggCalls.add(call.adaptTo(newScan, List.of(start), call.filterArg, groupCount, agg.getGroupCount()));
+            }
+        }
+
+        org.apache.calcite.rel.logical.LogicalAggregate newAgg = new org.apache.calcite.rel.logical.LogicalAggregate(
+            agg.getCluster(),
+            agg.getTraitSet(),
+            agg.getHints(),
+            newScan,
+            agg.getGroupSet(),
+            agg.getGroupSets(),
+            newAggCalls
+        );
+
+        boolean needsProject = finalExprs.stream().anyMatch(e -> e != null);
+        if (!needsProject) return newAgg;
+
+        List<org.apache.calcite.rex.RexNode> projectExprs = new ArrayList<>();
+        List<String> projectNames = new ArrayList<>();
+        for (int i = 0; i < groupCount; i++) {
+            projectExprs.add(rexBuilder.makeInputRef(newAgg, i));
+            projectNames.add(newAgg.getRowType().getFieldList().get(i).getName());
+        }
+        int aggColIdx = groupCount;
+        for (int i = 0; i < agg.getAggCallList().size(); i++) {
+            org.apache.calcite.rel.core.AggregateCall origCall = agg.getAggCallList().get(i);
+            org.opensearch.analytics.spi.AggregateFunction func = org.opensearch.analytics.spi.AggregateFunction.fromAggregateCall(
+                origCall
+            );
+            List<org.apache.arrow.vector.types.pojo.Field> iFields = func != null
+                ? capabilityRegistry.getIntermediateFields(backendId, func)
+                : null;
+            var finalExpr = finalExprs.get(i);
+            if (iFields != null && finalExpr != null) {
+                List<org.apache.calcite.rex.RexNode> partialRefs = new ArrayList<>();
+                for (int j = 0; j < iFields.size(); j++) {
+                    partialRefs.add(rexBuilder.makeInputRef(newAgg, aggColIdx + j));
+                }
+                projectExprs.add(finalExpr.apply(rexBuilder, partialRefs));
+                aggColIdx += iFields.size();
+            } else {
+                projectExprs.add(rexBuilder.makeInputRef(newAgg, aggColIdx));
+                aggColIdx += 1;
+            }
+            projectNames.add(origCall.name != null ? origCall.name : agg.getRowType().getFieldList().get(groupCount + i).getName());
+        }
+        RelDataType projectRowType = typeFactory.createStructType(
+            projectExprs.stream().map(org.apache.calcite.rex.RexNode::getType).toList(),
+            projectNames
+        );
+        return new org.apache.calcite.rel.logical.LogicalProject(
+            agg.getCluster(),
+            agg.getTraitSet(),
+            List.of(),
+            newAgg,
+            projectExprs,
+            projectRowType
+        );
+    }
+
+    private static RelDataType arrowTypeToCalcite(org.apache.arrow.vector.types.pojo.ArrowType arrowType, RelDataTypeFactory f) {
+        if (arrowType instanceof org.apache.arrow.vector.types.pojo.ArrowType.Int i && i.getBitWidth() == 64) {
+            return f.createSqlType(org.apache.calcite.sql.type.SqlTypeName.BIGINT);
+        }
+        if (arrowType instanceof org.apache.arrow.vector.types.pojo.ArrowType.FloatingPoint) {
+            return f.createSqlType(org.apache.calcite.sql.type.SqlTypeName.DOUBLE);
+        }
+        return f.createSqlType(org.apache.calcite.sql.type.SqlTypeName.VARBINARY, Integer.MAX_VALUE);
+    }
+
     private static RelNode rewriteStageInputScans(RelNode node) {
         if (node instanceof OpenSearchStageInputScan scan) {
             return new StageInputTableScan(scan.getCluster(), scan.getTraitSet(), "input-" + scan.getChildStageId(), scan.getRowType());
@@ -290,7 +488,16 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
             typeFactory,
             typeConverter
         );
-        AggregateFunctionConverter aggConverter = new AggregateFunctionConverter(extensions.aggregateFunctions(), typeFactory);
+        AggregateFunctionConverter aggConverter = new AggregateFunctionConverter(extensions.aggregateFunctions(), typeFactory) {
+            @Override
+            protected FunctionFinder getFunctionFinder(org.apache.calcite.rel.core.AggregateCall call) {
+                FunctionFinder finder = super.getFunctionFinder(call);
+                if (finder == null && call.getAggregation().getKind() == SqlKind.AVG) {
+                    finder = signatures.get(io.substrait.isthmus.AggregateFunctions.AVG);
+                }
+                return finder;
+            }
+        };
         WindowFunctionConverter windowConverter = new WindowFunctionConverter(extensions.windowFunctions(), typeFactory);
         ConverterProvider converterProvider = new ConverterProvider(
             typeFactory,
@@ -317,7 +524,32 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
 
     /** Serializes a model-level {@link Plan} to proto bytes. */
     private static byte[] serializePlan(Plan plan) {
-        return new PlanProtoConverter().toProto(plan).toByteArray();
+        io.substrait.proto.Plan proto = new PlanProtoConverter().toProto(plan);
+        proto = renameExtensionFunctions(proto);
+        return proto.toByteArray();
+    }
+
+    /** Renames Substrait extension function names to match DataFusion's expected names. */
+    private static io.substrait.proto.Plan renameExtensionFunctions(io.substrait.proto.Plan plan) {
+        boolean changed = false;
+        io.substrait.proto.Plan.Builder builder = plan.toBuilder();
+        for (int i = 0; i < plan.getExtensionsCount(); i++) {
+            io.substrait.proto.SimpleExtensionDeclaration ext = plan.getExtensions(i);
+            if (ext.hasExtensionFunction()) {
+                String name = ext.getExtensionFunction().getName();
+                String base = name.contains(":") ? name.substring(0, name.indexOf(':')) : name;
+                String to = FUNCTION_RENAMES.get(base);
+                if (to != null) {
+                    String newName = to + name.substring(base.length());
+                    builder.setExtensions(
+                        i,
+                        ext.toBuilder().setExtensionFunction(ext.getExtensionFunction().toBuilder().setName(newName)).build()
+                    );
+                    changed = true;
+                }
+            }
+        }
+        return changed ? builder.build() : plan;
     }
 
     // ── Calcite TableScan wrappers for OpenSearchStageInputScan rewrite ─────────

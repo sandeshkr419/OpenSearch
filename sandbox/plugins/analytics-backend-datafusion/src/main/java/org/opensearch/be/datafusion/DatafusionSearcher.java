@@ -58,27 +58,30 @@ public class DatafusionSearcher implements EngineSearcher<DatafusionContext> {
         DatafusionQuery query = context.getDatafusionQuery();
         NativeRuntimeHandle runtimeHandle = context.getNativeRuntime();
         CompletableFuture<Long> future = new CompletableFuture<>();
-        NativeBridge.executeWithContextAsync(sessionCtx, query.getSubstraitBytes(), new ActionListener<>() {
-            @Override
-            public void onResponse(Long streamPtr) {
-                future.complete(streamPtr);
-            }
+        NativeBridge.executeWithContextAsync(
+            sessionCtx.getPointer(),
+            query.getSubstraitBytes(),
+            context.getAggregateMode(),
+            new ActionListener<>() {
+                @Override
+                public void onResponse(Long streamPtr) {
+                    future.complete(streamPtr);
+                }
 
-            @Override
-            public void onFailure(Exception exception) {
-                future.completeExceptionally(exception);
+                @Override
+                public void onFailure(Exception exception) {
+                    future.completeExceptionally(exception);
+                }
             }
-        });
+        );
         long streamPtr;
         try {
             streamPtr = future.join();
         } catch (Exception exception) {
             throw new IOException("Query execution with session context failed", exception);
         }
-        // NativeBridge#executeWithContextAsync has already marked the handle consumed (which
-        // closes the Java wrapper) on both success and native-error paths; no explicit close
-        // is needed here. The owning DatafusionContext#close() closes it as a safety net for
-        // paths that never reach this method (e.g. aborted search).
+        // Rust consumed the session context — unregister from live handle set
+        sessionCtx.close();
         context.setStreamHandle(new StreamHandle(streamPtr, runtimeHandle));
     }
 
