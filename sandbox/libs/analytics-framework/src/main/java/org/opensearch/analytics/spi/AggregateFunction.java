@@ -8,7 +8,19 @@
 
 package org.opensearch.analytics.spi;
 
+import org.apache.arrow.vector.types.FloatingPointPrecision;
+import org.apache.arrow.vector.types.pojo.ArrowType;
+import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.arrow.vector.types.pojo.FieldType;
+import org.apache.calcite.rel.type.RelDataType;
+import org.apache.calcite.rex.RexBuilder;
+import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.sql.SqlKind;
+import org.apache.calcite.sql.fun.SqlStdOperatorTable;
+import org.apache.calcite.sql.type.SqlTypeName;
+
+import java.util.List;
+import java.util.function.BiFunction;
 
 /**
  * Aggregate functions that a backend may support, categorized by {@link Type}.
@@ -24,8 +36,24 @@ public enum AggregateFunction {
     SUM0(Type.SIMPLE, SqlKind.SUM0),
     MIN(Type.SIMPLE, SqlKind.MIN),
     MAX(Type.SIMPLE, SqlKind.MAX),
-    COUNT(Type.SIMPLE, SqlKind.COUNT),
-    AVG(Type.SIMPLE, SqlKind.AVG),
+    COUNT(
+        Type.SIMPLE,
+        SqlKind.COUNT,
+        List.of(new Field("", new FieldType(false, new ArrowType.Int(64, true), null), null)),
+        (rb, refs) -> refs.get(0)
+    ),
+    AVG(
+        Type.SIMPLE,
+        SqlKind.AVG,
+        List.of(
+            new Field("[count]", new FieldType(false, new ArrowType.Int(64, true), null), null),
+            new Field("[sum]", new FieldType(false, new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE), null), null)
+        ),
+        (rb, refs) -> {
+            RelDataType dbl = rb.getTypeFactory().createSqlType(SqlTypeName.DOUBLE);
+            return rb.makeCall(SqlStdOperatorTable.DIVIDE, rb.makeCast(dbl, refs.get(1)), rb.makeCast(dbl, refs.get(0)));
+        }
+    ),
 
     // Statistical — fixed-size state, multi-pass or running stats
     STDDEV_POP(Type.STATISTICAL, SqlKind.STDDEV_POP),
@@ -40,7 +68,12 @@ public enum AggregateFunction {
     LISTAGG(Type.STATE_EXPANDING, SqlKind.LISTAGG),
 
     // Approximate — probabilistic, fixed-size state
-    APPROX_COUNT_DISTINCT(Type.APPROXIMATE, SqlKind.OTHER);
+    APPROX_COUNT_DISTINCT(
+        Type.APPROXIMATE,
+        SqlKind.OTHER,
+        List.of(new Field("", new FieldType(false, ArrowType.Binary.INSTANCE, null), null)),
+        null
+    );
 
     /** Category of aggregate function. Affects execution strategy (shuffle vs map-reduce). */
     public enum Type {
@@ -52,10 +85,23 @@ public enum AggregateFunction {
 
     private final Type type;
     private final SqlKind sqlKind;
+    private final List<Field> intermediateFields;
+    private final BiFunction<RexBuilder, List<RexNode>, RexNode> finalExpression;
 
     AggregateFunction(Type type, SqlKind sqlKind) {
+        this(type, sqlKind, null, null);
+    }
+
+    AggregateFunction(
+        Type type,
+        SqlKind sqlKind,
+        List<Field> intermediateFields,
+        BiFunction<RexBuilder, List<RexNode>, RexNode> finalExpression
+    ) {
         this.type = type;
         this.sqlKind = sqlKind;
+        this.intermediateFields = intermediateFields;
+        this.finalExpression = finalExpression;
     }
 
     public Type getType() {
@@ -64,6 +110,16 @@ public enum AggregateFunction {
 
     public SqlKind getSqlKind() {
         return sqlKind;
+    }
+
+    /** Returns the Arrow fields for partial aggregate state, or null if no intermediate expansion needed. */
+    public List<Field> getIntermediateFields() {
+        return intermediateFields;
+    }
+
+    /** Returns the expression to compute the final result from intermediate columns, or null. */
+    public BiFunction<RexBuilder, List<RexNode>, RexNode> getFinalExpression() {
+        return finalExpression;
     }
 
     /** Maps a Calcite SqlKind to an AggregateFunction, or null if not recognized. Skips OTHER. */

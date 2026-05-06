@@ -15,7 +15,7 @@ import java.util.Map;
 /**
  * Backend execution context for coordinator-reduce stages.
  * Carries a pre-configured LocalSession with registered streaming partitions
- * and a prepared final-aggregate plan ready for execution.
+ * and a prepared plan ready for execution.
  */
 record DataFusionReduceState(DatafusionLocalSession session, NativeRuntimeHandle runtimeHandle, Map<
     Integer,

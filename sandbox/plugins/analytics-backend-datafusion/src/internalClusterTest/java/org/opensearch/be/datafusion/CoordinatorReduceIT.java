@@ -213,6 +213,32 @@ public class CoordinatorReduceIT extends OpenSearchIntegTestCase {
         );
     }
 
+    /** Tests scalar COUNT across shards — simplest aggregate, no intermediate field expansion. */
+    public void testScalarCountAcrossShards() throws Exception {
+        createParquetBackedIndex();
+        indexDeterministicDocs();
+
+        PPLResponse response = executePPL("source = " + INDEX + " | stats count() as cnt");
+
+        assertNotNull("PPLResponse must not be null", response);
+        assertEquals("scalar agg must return exactly 1 row", 1, response.getRows().size());
+        int idx = response.getColumns().indexOf("cnt");
+        long actual = ((Number) response.getRows().get(0)[idx]).longValue();
+        long expected = (long) NUM_SHARDS * DOCS_PER_SHARD;
+        assertEquals("COUNT() across shards", expected, actual);
+    }
+
+    /** Tests grouped SUM across shards — exercises grouped aggregate partial/final with group-by keys. */
+    public void testGroupedSumAcrossShards() throws Exception {
+        createParquetBackedIndex();
+        indexDeterministicDocs();
+
+        PPLResponse response = executePPL("source = " + INDEX + " | stats sum(value) as total by value");
+
+        assertNotNull("PPLResponse must not be null", response);
+        assertEquals("grouped agg must return exactly 1 group", 1, response.getRows().size());
+    }
+
     private PPLResponse executePPL(String ppl) {
         return client().execute(UnifiedPPLExecuteAction.INSTANCE, new PPLRequest(ppl)).actionGet();
     }

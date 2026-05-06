@@ -320,7 +320,7 @@ pub unsafe extern "C" fn df_execute_local_prepared_plan(session_ptr: i64) -> i64
                 cross_rt.schema(), cross_rt,
             );
             let handle = crate::api::QueryStreamHandle::new(
-                wrapped, crate::query_memory_pool_tracker::QueryTrackingContext::new(0, session.memory_pool()),
+                wrapped, crate::query_tracker::QueryTrackingContext::new(0, session.memory_pool()),
             );
             Box::into_raw(Box::new(handle)) as i64
         })

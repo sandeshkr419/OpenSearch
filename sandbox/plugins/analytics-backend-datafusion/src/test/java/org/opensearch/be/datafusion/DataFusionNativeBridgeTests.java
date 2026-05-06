@@ -96,7 +96,7 @@ public class DataFusionNativeBridgeTests extends OpenSearchTestCase {
             runtimeHandle.get()
         );
         CompletableFuture<Long> future = new CompletableFuture<>();
-        NativeBridge.executeWithContextAsync(sessionCtx.getPointer(), substrait, new ActionListener<>() {
+        NativeBridge.executeWithContextAsync(sessionCtx, substrait, new ActionListener<>() {
             @Override
             public void onResponse(Long streamPtr) {
                 future.complete(streamPtr);

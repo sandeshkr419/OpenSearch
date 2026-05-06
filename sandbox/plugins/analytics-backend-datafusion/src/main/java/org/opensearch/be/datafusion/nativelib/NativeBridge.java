@@ -369,6 +369,7 @@ public final class NativeBridge {
             lib.find("df_execute_local_prepared_plan").orElseThrow(),
             FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG)
         );
+
     }
 
     private NativeBridge() {}
@@ -775,12 +776,14 @@ public final class NativeBridge {
      * Executes a Substrait plan against the configured SessionContext with the given aggregate mode.
      * Consumes the session context handle (freed internally when stream closes).
      */
-    public static void executeWithContextAsync(long sessionCtxPtr, byte[] substraitPlan, ActionListener<Long> listener) {
-        NativeHandle.validatePointer(sessionCtxPtr, "sessionContext");
+    public static void executeWithContextAsync(SessionContextHandle handle, byte[] substraitPlan, ActionListener<Long> listener) {
+        NativeHandle.validatePointer(handle.getPointer(), "sessionContext");
         try (var call = new NativeCall()) {
-            long result = call.invoke(EXECUTE_WITH_CONTEXT, sessionCtxPtr, call.bytes(substraitPlan), (long) substraitPlan.length);
+            long result = call.invoke(EXECUTE_WITH_CONTEXT, handle.getPointer(), call.bytes(substraitPlan), (long) substraitPlan.length);
+            handle.markConsumed();
             listener.onResponse(result);
         } catch (Throwable throwable) {
+            handle.markConsumed();
             listener.onFailure(throwable instanceof Exception ? (Exception) throwable : new RuntimeException(throwable));
         }
     }

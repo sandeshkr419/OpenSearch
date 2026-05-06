@@ -8,11 +8,8 @@
 
 package org.opensearch.analytics.spi;
 
-import org.apache.calcite.rel.core.AggregateCall;
-
 import java.util.Map;
 import java.util.Set;
-import java.util.function.UnaryOperator;
 
 /**
  * Declares the query planning capabilities of a backend plugin.
@@ -89,7 +86,7 @@ public interface BackendCapabilityProvider {
      * Per-function adapters for transforming AggregateCall instances before planning.
      * E.g. rewriting COUNT(DISTINCT x) → APPROX_COUNT_DISTINCT(x) for backends using HLL.
      */
-    default Map<AggregateFunction, UnaryOperator<AggregateCall>> aggregateCallAdapters() {
+    default Map<AggregateFunction, AggregateFunctionAdapter> aggregateFunctionAdapters() {
         return Map.of();
     }
 }

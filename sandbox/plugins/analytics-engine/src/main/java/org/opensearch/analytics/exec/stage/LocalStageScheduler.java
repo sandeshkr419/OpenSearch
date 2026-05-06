@@ -15,7 +15,6 @@ import org.apache.calcite.rel.core.Aggregate;
 import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.rel.type.RelDataTypeField;
 import org.opensearch.analytics.exec.QueryContext;
-import org.opensearch.analytics.planner.CapabilityRegistry;
 import org.opensearch.analytics.planner.dag.Stage;
 import org.opensearch.analytics.planner.dag.StageExecutionType;
 import org.opensearch.analytics.spi.AggregateFunction;
@@ -48,11 +47,7 @@ import java.util.List;
  */
 final class LocalStageScheduler implements StageScheduler {
 
-    private final CapabilityRegistry capabilityRegistry;
-
-    LocalStageScheduler(CapabilityRegistry capabilityRegistry) {
-        this.capabilityRegistry = capabilityRegistry;
-    }
+    LocalStageScheduler() {}
 
     @Override
     public StageExecution createExecution(Stage stage, ExchangeSink sink, QueryContext config) {
@@ -129,6 +124,15 @@ final class LocalStageScheduler implements StageScheduler {
             return ArrowSchemaFromCalcite.arrowSchemaFromRowType(childFragment.getRowType());
         }
 
+        // Only use intermediate field expansion if any agg call actually has intermediate fields.
+        boolean hasIntermediateExpansion = agg.getAggCallList()
+            .stream()
+            .map(AggregateFunction::fromAggregateCall)
+            .anyMatch(f -> f != null && f.getIntermediateFields() != null);
+        if (!hasIntermediateExpansion) {
+            return ArrowSchemaFromCalcite.arrowSchemaFromRowType(childFragment.getRowType());
+        }
+
         String backendId = child.getPlanAlternatives().isEmpty() ? null : child.getPlanAlternatives().getFirst().backendId();
 
         List<Field> fields = new ArrayList<>();
@@ -154,10 +158,8 @@ final class LocalStageScheduler implements StageScheduler {
     }
 
     private List<Field> resolveIntermediateFields(AggregateCall call, String backendId) {
-        if (backendId == null || capabilityRegistry == null) return null;
         AggregateFunction func = AggregateFunction.fromAggregateCall(call);
-        if (func == null) return null;
-        return capabilityRegistry.getIntermediateFields(backendId, func);
+        return func != null ? func.getIntermediateFields() : null;
     }
 
     private static Aggregate findAggregate(RelNode node) {

@@ -24,6 +24,7 @@ import org.opensearch.analytics.planner.rel.OpenSearchProject;
 import org.opensearch.analytics.planner.rel.OpenSearchRelNode;
 import org.opensearch.analytics.planner.rel.OperatorAnnotation;
 import org.opensearch.analytics.spi.AggregateFunction;
+import org.opensearch.analytics.spi.AggregateFunctionAdapter;
 import org.opensearch.analytics.spi.FieldStorageInfo;
 import org.opensearch.analytics.spi.ScalarFunction;
 import org.opensearch.analytics.spi.ScalarFunctionAdapter;
@@ -31,7 +32,6 @@ import org.opensearch.analytics.spi.ScalarFunctionAdapter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.function.UnaryOperator;
 
 /**
  * Walks a resolved plan and applies per-function {@link ScalarFunctionAdapter}s
@@ -66,9 +66,9 @@ public class BackendPlanAdapter {
             Map<ScalarFunction, ScalarFunctionAdapter> scalarAdapters = registry.getBackend(plan.backendId())
                 .getCapabilityProvider()
                 .scalarFunctionAdapters();
-            Map<AggregateFunction, UnaryOperator<AggregateCall>> aggAdapters = registry.getBackend(plan.backendId())
+            Map<AggregateFunction, AggregateFunctionAdapter> aggAdapters = registry.getBackend(plan.backendId())
                 .getCapabilityProvider()
-                .aggregateCallAdapters();
+                .aggregateFunctionAdapters();
             if (scalarAdapters.isEmpty() && aggAdapters.isEmpty()) {
                 adapted.add(plan);
             } else {
@@ -84,7 +84,7 @@ public class BackendPlanAdapter {
     private static RelNode adaptNode(
         RelNode node,
         Map<ScalarFunction, ScalarFunctionAdapter> scalarAdapters,
-        Map<AggregateFunction, UnaryOperator<AggregateCall>> aggAdapters
+        Map<AggregateFunction, AggregateFunctionAdapter> aggAdapters
     ) {
         List<RelNode> adaptedChildren = new ArrayList<>(node.getInputs().size());
         boolean childrenChanged = false;
@@ -100,7 +100,7 @@ public class BackendPlanAdapter {
             for (AggregateCall call : agg.getAggCallList()) {
                 AggregateFunction func = AggregateFunction.fromAggregateCall(call);
                 var adapter = func != null ? aggAdapters.get(func) : null;
-                AggregateCall adapted = adapter != null ? adapter.apply(call) : call;
+                AggregateCall adapted = adapter != null ? adapter.adapt(call) : call;
                 adaptedCalls.add(adapted);
                 if (adapted != call) callsChanged = true;
             }

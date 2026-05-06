@@ -131,5 +131,4 @@ public class DatafusionContext implements SearchExecutionContext<DatafusionSearc
     public void setSessionContextHandle(SessionContextHandle sessionContextHandle) {
         this.sessionContextHandle = sessionContextHandle;
     }
-
 }

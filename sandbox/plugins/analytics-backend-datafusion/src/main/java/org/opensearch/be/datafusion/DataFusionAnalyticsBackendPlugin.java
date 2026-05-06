@@ -8,16 +8,15 @@
 
 package org.opensearch.be.datafusion;
 
-import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.calcite.rel.core.AggregateCall;
-import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
-import org.apache.calcite.sql.type.SqlTypeName;
 import org.opensearch.analytics.spi.AggregateCapability;
 import org.opensearch.analytics.spi.AggregateFunction;
+import org.opensearch.analytics.spi.AggregateFunctionAdapter;
 import org.opensearch.analytics.spi.AnalyticsSearchBackendPlugin;
 import org.opensearch.analytics.spi.BackendCapabilityProvider;
 import org.opensearch.analytics.spi.EngineCapability;
+import org.opensearch.analytics.spi.ExchangeSinkContext;
 import org.opensearch.analytics.spi.ExchangeSinkProvider;
 import org.opensearch.analytics.spi.FieldType;
 import org.opensearch.analytics.spi.FilterCapability;
@@ -29,13 +28,12 @@ import org.opensearch.analytics.spi.ScalarFunctionAdapter;
 import org.opensearch.analytics.spi.ScanCapability;
 import org.opensearch.analytics.spi.SearchExecEngineProvider;
 import org.opensearch.analytics.spi.StdOperatorRewriteAdapter;
+import org.opensearch.be.datafusion.nativelib.NativeBridge;
 import org.opensearch.index.engine.dataformat.DataFormatRegistry;
 
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.UnaryOperator;
 
 /**
  * SPI extension discovered by analytics-engine via {@code META-INF/services}.
@@ -196,39 +194,7 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
                 for (AggregateFunction func : AGG_FUNCTIONS) {
                     for (FieldType type : SUPPORTED_FIELD_TYPES) {
                         if (func == AggregateFunction.APPROX_COUNT_DISTINCT) {
-                            caps.add(AggregateCapability.approximate(func, Set.of(type), formats, ArrowType.Binary.INSTANCE));
-                        } else if (func == AggregateFunction.AVG) {
-                            caps.add(
-                                AggregateCapability.withIntermediateFields(
-                                    func,
-                                    Set.of(type),
-                                    formats,
-                                    List.of(
-                                        new org.apache.arrow.vector.types.pojo.Field(
-                                            "[count]",
-                                            new org.apache.arrow.vector.types.pojo.FieldType(false, new ArrowType.Int(64, true), null),
-                                            null
-                                        ),
-                                        new org.apache.arrow.vector.types.pojo.Field(
-                                            "[sum]",
-                                            new org.apache.arrow.vector.types.pojo.FieldType(
-                                                false,
-                                                new ArrowType.FloatingPoint(org.apache.arrow.vector.types.FloatingPointPrecision.DOUBLE),
-                                                null
-                                            ),
-                                            null
-                                        )
-                                    ),
-                                    (rb, refs) -> {
-                                        RelDataType dbl = rb.getTypeFactory().createSqlType(SqlTypeName.DOUBLE);
-                                        return rb.makeCall(
-                                            SqlStdOperatorTable.DIVIDE,
-                                            rb.makeCast(dbl, refs.get(1)),
-                                            rb.makeCast(dbl, refs.get(0))
-                                        );
-                                    }
-                                )
-                            );
+                            caps.add(AggregateCapability.approximate(func, Set.of(type), formats));
                         } else {
                             caps.add(AggregateCapability.simple(func, Set.of(type), formats));
                         }
@@ -257,7 +223,7 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
             }
 
             @Override
-            public Map<AggregateFunction, UnaryOperator<AggregateCall>> aggregateCallAdapters() {
+            public Map<AggregateFunction, AggregateFunctionAdapter> aggregateFunctionAdapters() {
                 return Map.of(AggregateFunction.COUNT, call -> {
                     if (!call.isDistinct() || call.isApproximate()) return call;
                     return AggregateCall.create(
@@ -325,6 +291,21 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
     @Override
     public ExchangeSinkProvider getExchangeSinkProvider() {
         return (ctx, backendContext) -> {
+            if (backendContext == null) {
+                // Non-aggregate coordinator reduce (e.g. union/append) — create session and register
+                // partitions without a prepared plan; the sink will execute fragmentBytes directly.
+                NativeRuntimeHandle runtime = plugin.getDataFusionService().getNativeRuntime();
+                DatafusionLocalSession session = new DatafusionLocalSession(runtime.get());
+                Map<Integer, DatafusionPartitionSender> senders = new java.util.LinkedHashMap<>(ctx.childInputs().size());
+                for (ExchangeSinkContext.ChildInput child : ctx.childInputs()) {
+                    byte[] schemaIpc = ArrowSchemaIpc.toBytes(child.schema());
+                    String inputId = "input-" + child.childStageId();
+                    long senderPtr = NativeBridge.registerPartitionStream(session.getPointer(), inputId, schemaIpc);
+                    senders.put(child.childStageId(), new DatafusionPartitionSender(senderPtr));
+                }
+                NativeBridge.prepareFinalPlan(session.getPointer(), ctx.fragmentBytes());
+                backendContext = new DataFusionReduceState(session, runtime, senders);
+            }
             DataFusionReduceState state = (DataFusionReduceState) backendContext;
             return new DatafusionReduceSink(ctx, state);
         };

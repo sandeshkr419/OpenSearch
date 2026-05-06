@@ -89,7 +89,6 @@ public final class DatafusionReduceSink extends AbstractDatafusionReduceSink imp
         Map<Integer, DatafusionPartitionSender> senders = state.senders();
         long streamPtr = 0;
         try {
-            // Plan was prepared by FinalAggregateInstructionHandler — just execute it
             streamPtr = NativeBridge.executeLocalPreparedPlan(session.getPointer());
             this.outStream = new StreamHandle(streamPtr, state.runtimeHandle());
         } catch (RuntimeException e) {

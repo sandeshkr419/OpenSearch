@@ -70,7 +70,6 @@ impl LocalSession {
             .with_config(SessionConfig::new())
             .with_runtime_env(runtime_env)
             .with_default_features()
-            .with_physical_optimizer_rules(crate::agg_mode::physical_optimizer_rules_without_combine())
             .build();
         let ctx = SessionContext::new_with_state(state);
         crate::udf::register_all(&ctx);
@@ -146,7 +145,13 @@ impl LocalSession {
             DataFusionError::Execution(format!("Failed to decode Substrait plan: {}", e))
         })?;
         let logical_plan = from_substrait_plan(&self.ctx.state(), &plan).await?;
-        let df = self.ctx.execute_logical_plan(logical_plan).await?;
+        // Use custom optimizer rules that exclude CombinePartialFinalAggregate so
+        // force_aggregate_mode can cleanly strip one half of Final(Partial(...)).
+        let state = SessionStateBuilder::new_from_existing(self.ctx.state())
+            .with_physical_optimizer_rules(crate::agg_mode::physical_optimizer_rules_without_combine())
+            .build();
+        let tmp_ctx = SessionContext::new_with_state(state);
+        let df = tmp_ctx.execute_logical_plan(logical_plan).await?;
         let physical_plan = df.create_physical_plan().await?;
         let physical_plan = crate::agg_mode::apply_aggregate_mode(physical_plan, crate::agg_mode::Mode::Final)?;
         self.prepared_plan = Some(physical_plan);

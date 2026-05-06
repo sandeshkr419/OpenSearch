@@ -111,7 +111,7 @@ public class FragmentConversionDriver {
                 : FilterTreeShape.NO_DELEGATION;
 
             IntraOperatorDelegationBytes delegationBytes = new IntraOperatorDelegationBytes(registry);
-            byte[] bytes = convert(plan.resolvedFragment(), convertor, delegationBytes, registry, plan.backendId());
+            byte[] bytes = convert(plan.resolvedFragment(), convertor, delegationBytes);
 
             // Assemble instruction list
             List<InstructionNode> instructions = assembleInstructions(backend, plan, treeShape, delegationBytes);
@@ -147,7 +147,9 @@ public class FragmentConversionDriver {
                 factory.createPartialAggregateNode().ifPresent(instructions::add);
             }
         } else if (leaf instanceof OpenSearchStageInputScan) {
-            factory.createFinalAggregateNode().ifPresent(instructions::add);
+            if (hasAggregate(plan.resolvedFragment())) {
+                factory.createFinalAggregateNode().ifPresent(instructions::add);
+            }
         }
 
         return instructions;
@@ -222,13 +224,7 @@ public class FragmentConversionDriver {
     /**
      * Dispatches conversion based on the fragment's leaf and top node types.
      */
-    static byte[] convert(
-        RelNode resolvedFragment,
-        FragmentConvertor convertor,
-        IntraOperatorDelegationBytes delegationBytes,
-        CapabilityRegistry registry,
-        String backendId
-    ) {
+    static byte[] convert(RelNode resolvedFragment, FragmentConvertor convertor, IntraOperatorDelegationBytes delegationBytes) {
         RelNode leaf = findLeaf(resolvedFragment);
 
         if (leaf instanceof OpenSearchTableScan scan) {
@@ -249,7 +245,7 @@ public class FragmentConversionDriver {
         }
 
         if (leaf instanceof OpenSearchStageInputScan) {
-            return convertReduceFragment(resolvedFragment, convertor, delegationBytes, registry, backendId);
+            return convertReduceFragment(resolvedFragment, convertor, delegationBytes);
         }
 
         throw new IllegalStateException(
@@ -272,30 +268,20 @@ public class FragmentConversionDriver {
      * when shuffle joins are implemented (check if all inputs are StageInputScan
      * and dispatch to a dedicated convertJoinFragment method).
      */
-    private static byte[] convertReduceFragment(
-        RelNode node,
-        FragmentConvertor convertor,
-        IntraOperatorDelegationBytes delegationBytes,
-        CapabilityRegistry registry,
-        String backendId
-    ) {
-        return convertReduceNode(node, convertor, false, delegationBytes, registry, backendId);
+    private static byte[] convertReduceFragment(RelNode node, FragmentConvertor convertor, IntraOperatorDelegationBytes delegationBytes) {
+        return convertReduceNode(node, convertor, false, delegationBytes);
     }
 
     private static byte[] convertReduceNode(
         RelNode node,
         FragmentConvertor convertor,
         boolean finalAggConverted,
-        IntraOperatorDelegationBytes delegationBytes,
-        CapabilityRegistry registry,
-        String backendId
+        IntraOperatorDelegationBytes delegationBytes
     ) {
         if (node instanceof OpenSearchExchangeReducer) {
             // Strip ExchangeReducer — StageInputScan below it is the schema source
             // This should never be reached directly; handled by the parent (final agg)
-            return convertor.convertFinalAggFragment(
-                fixIntermediateInputTypes(strip(node.getInputs().getFirst(), delegationBytes), registry, backendId)
-            );
+            return convertor.convertFinalAggFragment(fixIntermediateInputTypes(strip(node.getInputs().getFirst(), delegationBytes)));
         }
         if (node instanceof OpenSearchRelNode openSearchNode) {
             List<RelNode> strippedInputs = node.getInputs().stream().map(input -> strip(input, delegationBytes)).toList();
@@ -319,12 +305,12 @@ public class FragmentConversionDriver {
                         finalAggInputs.add(strip(input.getInputs().getFirst(), delegationBytes));
                     }
                     RelNode finalAggFragment = openSearchNode.stripAnnotations(finalAggInputs, resolver);
-                    return convertor.convertFinalAggFragment(fixIntermediateInputTypes(finalAggFragment, registry, backendId));
+                    return convertor.convertFinalAggFragment(fixIntermediateInputTypes(finalAggFragment));
                 }
             }
 
             // Operator above the final-fragment boundary — convert child first, then attach.
-            byte[] innerBytes = convertReduceNode(node.getInputs().getFirst(), convertor, false, delegationBytes, registry, backendId);
+            byte[] innerBytes = convertReduceNode(node.getInputs().getFirst(), convertor, false, delegationBytes);
             return convertor.attachFragmentOnTop(strippedNode, innerBytes);
         }
         throw new IllegalStateException("Unexpected reduce stage node: " + node.getClass().getSimpleName());
@@ -354,10 +340,10 @@ public class FragmentConversionDriver {
      * for aggregate calls with declared intermediateFields. Also rewrites the aggregate
      * to SUM the intermediate columns and adds a Project with the finalExpression.
      */
-    private static RelNode fixIntermediateInputTypes(RelNode node, CapabilityRegistry registry, String backendId) {
+    private static RelNode fixIntermediateInputTypes(RelNode node) {
         if (!(node instanceof org.apache.calcite.rel.core.Aggregate agg)) {
             if (node.getInputs().size() == 1) {
-                return node.copy(node.getTraitSet(), List.of(fixIntermediateInputTypes(node.getInputs().get(0), registry, backendId)));
+                return node.copy(node.getTraitSet(), List.of(fixIntermediateInputTypes(node.getInputs().get(0))));
             }
             return node;
         }
@@ -384,7 +370,7 @@ public class FragmentConversionDriver {
             AggregateCall call = agg.getAggCallList().get(i);
             RelDataTypeField f = scan.getRowType().getFieldList().get(groupCount + i);
             AggregateFunction func = AggregateFunction.fromAggregateCall(call);
-            List<Field> iFields = func != null ? registry.getIntermediateFields(backendId, func) : null;
+            List<Field> iFields = func != null ? func.getIntermediateFields() : null;
             partialStart.add(scanNames.size());
             if (iFields != null) {
                 needsRewrite = true;
@@ -393,11 +379,12 @@ public class FragmentConversionDriver {
                     scanNames.add(suffix.isEmpty() ? f.getName() : f.getName() + suffix);
                     scanTypes.add(arrowTypeToCalcite(iField.getFieldType().getType(), typeFactory));
                 }
-                finalExprs.add(registry.getFinalExpression(backendId, func));
+                finalExprs.add(func.getFinalExpression());
             } else {
+                needsRewrite = true;
                 scanNames.add(f.getName());
                 scanTypes.add(f.getType());
-                finalExprs.add(null);
+                finalExprs.add((rb, refs) -> refs.get(0));
             }
         }
         if (!needsRewrite) return node;
@@ -408,29 +395,51 @@ public class FragmentConversionDriver {
         for (int i = 0; i < agg.getAggCallList().size(); i++) {
             AggregateCall call = agg.getAggCallList().get(i);
             AggregateFunction func = AggregateFunction.fromAggregateCall(call);
-            List<Field> iFields = func != null ? registry.getIntermediateFields(backendId, func) : null;
+            List<Field> iFields = func != null ? func.getIntermediateFields() : null;
             int start = partialStart.get(i);
-            if (iFields != null && finalExprs.get(i) != null) {
-                for (int j = 0; j < iFields.size(); j++) {
-                    org.apache.calcite.rel.type.RelDataType colType = typeFactory.createTypeWithNullability(scanTypes.get(start + j), true);
-                    newAggCalls.add(
-                        AggregateCall.create(
-                            SqlStdOperatorTable.SUM,
-                            false,
-                            false,
-                            false,
-                            List.of(),
-                            List.of(start + j),
-                            -1,
-                            null,
-                            RelCollations.EMPTY,
-                            colType,
-                            scanNames.get(start + j)
-                        )
-                    );
+            if (iFields != null) {
+                var finalExpr = finalExprs.get(i);
+                if (finalExpr != null) {
+                    // SUM each intermediate field; finalExpr combines them in the Project
+                    for (int j = 0; j < iFields.size(); j++) {
+                        var sumType = typeFactory.createTypeWithNullability(scanTypes.get(start + j), true);
+                        newAggCalls.add(
+                            AggregateCall.create(
+                                SqlStdOperatorTable.SUM,
+                                false,
+                                false,
+                                false,
+                                List.of(),
+                                List.of(start + j),
+                                -1,
+                                null,
+                                RelCollations.EMPTY,
+                                sumType,
+                                scanNames.get(start + j)
+                            )
+                        );
+                    }
+                } else {
+                    // No finalExpr (e.g. DC): keep original call adapted to new scan column
+                    newAggCalls.add(call.adaptTo(newScan, List.of(start), call.filterArg, groupCount, agg.getGroupCount()));
                 }
             } else {
-                newAggCalls.add(call.adaptTo(newScan, List.of(start), call.filterArg, groupCount, agg.getGroupCount()));
+                var sumType = typeFactory.createTypeWithNullability(scanTypes.get(start), true);
+                newAggCalls.add(
+                    AggregateCall.create(
+                        SqlStdOperatorTable.SUM,
+                        false,
+                        false,
+                        false,
+                        List.of(),
+                        List.of(start),
+                        -1,
+                        null,
+                        RelCollations.EMPTY,
+                        sumType,
+                        scanNames.get(start)
+                    )
+                );
             }
         }
 
@@ -457,7 +466,7 @@ public class FragmentConversionDriver {
         for (int i = 0; i < agg.getAggCallList().size(); i++) {
             AggregateCall origCall = agg.getAggCallList().get(i);
             AggregateFunction func = AggregateFunction.fromAggregateCall(origCall);
-            List<Field> iFields = func != null ? registry.getIntermediateFields(backendId, func) : null;
+            List<Field> iFields = func != null ? func.getIntermediateFields() : null;
             var finalExpr = finalExprs.get(i);
             if (iFields != null && finalExpr != null) {
                 List<RexNode> partialRefs = new ArrayList<>();
@@ -465,6 +474,9 @@ public class FragmentConversionDriver {
                     partialRefs.add(rexBuilder.makeInputRef(newAgg, aggColIdx + j));
                 }
                 projectExprs.add(finalExpr.apply(rexBuilder, partialRefs));
+                aggColIdx += iFields.size();
+            } else if (iFields != null) {
+                projectExprs.add(rexBuilder.makeInputRef(newAgg, aggColIdx));
                 aggColIdx += iFields.size();
             } else {
                 projectExprs.add(rexBuilder.makeInputRef(newAgg, aggColIdx));
@@ -487,6 +499,12 @@ public class FragmentConversionDriver {
             return f.createSqlType(SqlTypeName.DOUBLE);
         }
         return f.createSqlType(SqlTypeName.VARBINARY, Integer.MAX_VALUE);
+    }
+
+    private static boolean hasAggregate(RelNode node) {
+        if (node instanceof org.apache.calcite.rel.core.Aggregate) return true;
+        if (node.getInputs().size() == 1) return hasAggregate(node.getInputs().get(0));
+        return false;
     }
 
     private static RelNode findLeaf(RelNode node) {
