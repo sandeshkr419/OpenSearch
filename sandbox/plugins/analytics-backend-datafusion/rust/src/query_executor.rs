@@ -163,9 +163,9 @@ pub async unsafe fn execute_with_context(
     session_ctx_ptr: i64,
     plan_bytes: &[u8],
     cpu_executor: DedicatedExecutor,
-    mode: i32,
 ) -> Result<i64, DataFusionError> {
     let handle = *Box::from_raw(session_ctx_ptr as *mut SessionContextHandle);
+    let mode = handle.aggregate_mode;
 
     let substrait_plan = Plan::decode(plan_bytes).map_err(|e| {
         DataFusionError::Execution(format!("Failed to decode Substrait: {}", e))

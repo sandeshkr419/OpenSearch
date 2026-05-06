@@ -8,7 +8,6 @@
 
 package org.opensearch.be.datafusion;
 
-import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.opensearch.analytics.spi.BackendExecutionContext;
 import org.opensearch.analytics.spi.CommonExecutionContext;
 import org.opensearch.analytics.spi.FinalAggregateInstructionNode;
@@ -16,7 +15,7 @@ import org.opensearch.analytics.spi.FragmentInstructionHandler;
 
 /**
  * Handles FinalAggregate instruction for coordinator-reduce stages.
- * Sets mode=FINAL so the Rust executor merges partial state.
+ * The coordinator's LocalSession is configured for final mode via executeLocalPlan.
  */
 class FinalAggregateInstructionHandler implements FragmentInstructionHandler<FinalAggregateInstructionNode> {
 
@@ -26,11 +25,8 @@ class FinalAggregateInstructionHandler implements FragmentInstructionHandler<Fin
         CommonExecutionContext commonContext,
         BackendExecutionContext backendContext
     ) {
-        // For coordinator-reduce path, backendContext may be null (no ShardScan handler ran).
-        if (backendContext == null) {
-            return new DataFusionSessionState(null, AggregateExecutionMode.FINAL);
-        }
-        DataFusionSessionState prev = (DataFusionSessionState) backendContext;
-        return new DataFusionSessionState(prev.sessionContextHandle(), AggregateExecutionMode.FINAL);
+        // Coordinator-reduce path: final mode is inherent to the reduce sink (executeLocalPlanFinal).
+        // No session context to configure here — the LocalSession is created by the sink.
+        return backendContext;
     }
 }

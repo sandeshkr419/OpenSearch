@@ -138,7 +138,7 @@ impl LocalSession {
         &self,
         bytes: &[u8],
     ) -> Result<SendableRecordBatchStream, DataFusionError> {
-        self.execute_substrait_with_mode(bytes, 0).await
+        self.execute_substrait_with_mode(bytes, crate::agg_mode::Mode::Default).await
     }
 
     /// Executes a Substrait plan with optional aggregate mode forcing.
@@ -146,14 +146,14 @@ impl LocalSession {
     pub async fn execute_substrait_with_mode(
         &self,
         bytes: &[u8],
-        mode: i32,
+        mode: crate::agg_mode::Mode,
     ) -> Result<SendableRecordBatchStream, DataFusionError> {
         let plan = Plan::decode(bytes).map_err(|e| {
             DataFusionError::Execution(format!("Failed to decode Substrait plan: {}", e))
         })?;
         let logical_plan = from_substrait_plan(&self.ctx.state(), &plan).await?;
         let df = self.ctx.execute_logical_plan(logical_plan).await?;
-        if mode == 0 {
+        if mode == crate::agg_mode::Mode::Default {
             return df.execute_stream().await;
         }
         let physical_plan = df.create_physical_plan().await?;

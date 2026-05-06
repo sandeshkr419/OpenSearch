@@ -37,6 +37,7 @@ pub struct SessionContextHandle {
     pub table_path: ListingTableUrl,
     pub object_metas: Arc<Vec<ObjectMeta>>,
     pub query_context: QueryTrackingContext,
+    pub aggregate_mode: crate::agg_mode::Mode,
 }
 
 /// Creates a SessionContext with per-query RuntimeEnv and registers the default
@@ -136,6 +137,7 @@ pub async unsafe fn create_session_context(
         table_path: shard_view.table_path.clone(),
         object_metas: shard_view.object_metas.clone(),
         query_context,
+        aggregate_mode: crate::agg_mode::Mode::Default,
     };
     Ok(Box::into_raw(Box::new(handle)) as i64)
 }
@@ -148,4 +150,14 @@ pub unsafe fn close_session_context(ptr: i64) {
     if ptr != 0 {
         let _ = Box::from_raw(ptr as *mut SessionContextHandle);
     }
+}
+
+/// Sets the aggregate execution mode on a SessionContext handle.
+/// Called by PartialAggregateInstructionHandler to configure partial mode.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `create_session_context`.
+pub unsafe fn set_partial_aggregate_mode(ptr: i64) {
+    let handle = &mut *(ptr as *mut SessionContextHandle);
+    handle.aggregate_mode = crate::agg_mode::Mode::Partial;
 }

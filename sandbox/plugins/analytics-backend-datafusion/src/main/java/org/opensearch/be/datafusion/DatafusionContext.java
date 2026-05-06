@@ -8,7 +8,6 @@
 
 package org.opensearch.be.datafusion;
 
-import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.opensearch.be.datafusion.nativelib.SessionContextHandle;
 import org.opensearch.be.datafusion.nativelib.StreamHandle;
 import org.opensearch.common.annotation.ExperimentalApi;
@@ -34,7 +33,6 @@ public class DatafusionContext implements SearchExecutionContext<DatafusionSearc
     private StreamHandle streamHandle;
     private Task task;
     private SessionContextHandle sessionContextHandle;
-    private AggregateExecutionMode aggregateMode = AggregateExecutionMode.DEFAULT;
 
     /**
      * Creates a DataFusion execution context
@@ -134,11 +132,4 @@ public class DatafusionContext implements SearchExecutionContext<DatafusionSearc
         this.sessionContextHandle = sessionContextHandle;
     }
 
-    public AggregateExecutionMode getAggregateMode() {
-        return aggregateMode;
-    }
-
-    public void setAggregateMode(AggregateExecutionMode aggregateMode) {
-        this.aggregateMode = aggregateMode;
-    }
 }

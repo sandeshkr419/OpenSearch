@@ -13,7 +13,6 @@ import org.apache.arrow.c.ArrowSchema;
 import org.apache.arrow.c.Data;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
-import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.opensearch.analytics.spi.ExchangeSinkContext;
 import org.opensearch.be.datafusion.nativelib.NativeBridge;
 import org.opensearch.be.datafusion.nativelib.StreamHandle;
@@ -124,7 +123,7 @@ public final class DatafusionMemtableReduceSink extends AbstractDatafusionReduce
             int singleChildStageId = childInputs.keySet().iterator().next();
             NativeBridge.registerMemtable(session.getPointer(), inputIdFor(singleChildStageId), schemaIpc, arrayPtrs, schemaPtrs);
 
-            streamPtr = NativeBridge.executeLocalPlan(session.getPointer(), ctx.fragmentBytes(), AggregateExecutionMode.FINAL);
+            streamPtr = NativeBridge.executeLocalPlanFinal(session.getPointer(), ctx.fragmentBytes());
             try (StreamHandle outStream = new StreamHandle(streamPtr, runtimeHandle)) {
                 streamPtr = 0;
                 drainOutputIntoDownstream(outStream);

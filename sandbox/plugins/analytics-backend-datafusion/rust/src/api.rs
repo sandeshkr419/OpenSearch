@@ -579,7 +579,7 @@ pub async unsafe fn execute_local_plan(
     substrait_bytes: &[u8],
     manager: &RuntimeManager,
     context_id: i64,
-    mode: i32,
+    mode: crate::agg_mode::Mode,
 ) -> Result<i64, DataFusionError> {
     let session = &*(session_ptr as *const LocalSession);
 

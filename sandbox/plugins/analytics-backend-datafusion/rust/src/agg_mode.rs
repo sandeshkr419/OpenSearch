@@ -10,6 +10,18 @@
 
 use std::sync::Arc;
 
+/// Aggregate execution mode for distributed partial/final execution.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(crate) enum Mode {
+    /// No mode forcing — plain scan or full aggregation.
+    #[default]
+    Default,
+    /// Shard emits intermediate aggregate state.
+    Partial,
+    /// Coordinator merges partial state into final result.
+    Final,
+}
+
 use datafusion::common::DataFusionError;
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion::physical_optimizer::optimizer::PhysicalOptimizer;
@@ -30,17 +42,15 @@ pub(crate) fn physical_optimizer_rules_without_combine() -> Vec<Arc<dyn Physical
         .collect()
 }
 
-/// Applies aggregate mode forcing if mode != 0.
-/// 0 = default (no forcing), 1 = partial, 2 = final.
+/// Applies aggregate mode forcing based on the configured mode.
 pub(crate) fn apply_aggregate_mode(
     plan: Arc<dyn ExecutionPlan>,
-    mode: i32,
+    mode: Mode,
 ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
     match mode {
-        0 => Ok(plan),
-        1 => force_aggregate_mode(plan, AggregateMode::Partial),
-        2 => force_aggregate_mode(plan, AggregateMode::Final),
-        _ => Err(DataFusionError::Execution(format!("Unknown aggregate mode: {mode}"))),
+        Mode::Default => Ok(plan),
+        Mode::Partial => force_aggregate_mode(plan, AggregateMode::Partial),
+        Mode::Final => force_aggregate_mode(plan, AggregateMode::Final),
     }
 }
 

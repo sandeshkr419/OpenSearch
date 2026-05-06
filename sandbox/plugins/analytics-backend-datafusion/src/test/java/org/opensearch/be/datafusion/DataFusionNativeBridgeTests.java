@@ -8,7 +8,6 @@
 
 package org.opensearch.be.datafusion;
 
-import org.opensearch.analytics.backend.AggregateExecutionMode;
 import org.opensearch.be.datafusion.nativelib.NativeBridge;
 import org.opensearch.be.datafusion.nativelib.ReaderHandle;
 import org.opensearch.be.datafusion.nativelib.SessionContextHandle;
@@ -97,7 +96,7 @@ public class DataFusionNativeBridgeTests extends OpenSearchTestCase {
             runtimeHandle.get()
         );
         CompletableFuture<Long> future = new CompletableFuture<>();
-        NativeBridge.executeWithContextAsync(sessionCtx.getPointer(), substrait, AggregateExecutionMode.DEFAULT, new ActionListener<>() {
+        NativeBridge.executeWithContextAsync(sessionCtx.getPointer(), substrait, new ActionListener<>() {
             @Override
             public void onResponse(Long streamPtr) {
                 future.complete(streamPtr);

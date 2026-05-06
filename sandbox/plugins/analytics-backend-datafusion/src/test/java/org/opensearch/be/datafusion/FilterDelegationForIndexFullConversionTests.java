@@ -443,7 +443,7 @@ public class FilterDelegationForIndexFullConversionTests extends OpenSearchTestC
 
         @Override
         public ExchangeSinkProvider getExchangeSinkProvider() {
-            return context -> null;
+            return (context, backendContext) -> null;
         }
 
         @Override

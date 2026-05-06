@@ -310,7 +310,6 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
             if (backendContext != null) {
                 DataFusionSessionState sessionState = (DataFusionSessionState) backendContext;
                 context.setSessionContextHandle(sessionState.sessionContextHandle());
-                context.setAggregateMode(sessionState.mode());
             }
             DatafusionSearchExecEngine engine = new DatafusionSearchExecEngine(context);
             engine.prepare(ctx);
@@ -325,7 +324,7 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
 
     @Override
     public ExchangeSinkProvider getExchangeSinkProvider() {
-        return ctx -> {
+        return (ctx, backendContext) -> {
             DataFusionService svc = plugin.getDataFusionService();
             if (svc == null) {
                 throw new IllegalStateException("DataFusionService not initialized");

@@ -28,5 +28,5 @@ public interface ExchangeSinkProvider {
      * (produced by {@link FragmentConvertor#convertFinalAggFragment}) and
      * writes its reduced output into {@link ExchangeSinkContext#downstream()}.
      */
-    ExchangeSink createSink(ExchangeSinkContext context);
+    ExchangeSink createSink(ExchangeSinkContext context, BackendExecutionContext backendContext);
 }

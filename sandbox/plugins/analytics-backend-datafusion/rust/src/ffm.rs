@@ -289,7 +289,7 @@ pub unsafe extern "C" fn df_execute_local_plan(
     substrait_ptr: *const u8,
     substrait_len: i64,
 ) -> i64 {
-    execute_local_plan_mode(session_ptr, substrait_ptr, substrait_len, 0)
+    execute_local_plan_mode(session_ptr, substrait_ptr, substrait_len, crate::agg_mode::Mode::Default)
 }
 
 #[ffm_safe]
@@ -299,14 +299,14 @@ pub unsafe extern "C" fn df_execute_local_plan_final(
     substrait_ptr: *const u8,
     substrait_len: i64,
 ) -> i64 {
-    execute_local_plan_mode(session_ptr, substrait_ptr, substrait_len, 2)
+    execute_local_plan_mode(session_ptr, substrait_ptr, substrait_len, crate::agg_mode::Mode::Final)
 }
 
 unsafe fn execute_local_plan_mode(
     session_ptr: i64,
     substrait_ptr: *const u8,
     substrait_len: i64,
-    mode: i32,
+    mode: crate::agg_mode::Mode,
 ) -> Result<i64, String> {
     let mgr = get_rt_manager()?;
     let bytes_vec = slice::from_raw_parts(substrait_ptr, substrait_len as usize).to_vec();
@@ -603,40 +603,18 @@ pub unsafe extern "C" fn df_close_session_context(ptr: i64) {
 
 #[ffm_safe]
 #[no_mangle]
+pub unsafe extern "C" fn df_set_partial_aggregate_mode(session_ctx_ptr: i64) -> i64 {
+    crate::session_context::set_partial_aggregate_mode(session_ctx_ptr);
+    Ok(0)
+}
+
+#[ffm_safe]
+#[no_mangle]
 pub unsafe extern "C" fn df_execute_with_context(
     session_ctx_ptr: i64,
     plan_ptr: *const u8,
     plan_len: i64,
 ) -> i64 {
-    execute_with_context_mode(session_ctx_ptr, plan_ptr, plan_len, 0)
-}
-
-#[ffm_safe]
-#[no_mangle]
-pub unsafe extern "C" fn df_execute_with_context_partial(
-    session_ctx_ptr: i64,
-    plan_ptr: *const u8,
-    plan_len: i64,
-) -> i64 {
-    execute_with_context_mode(session_ctx_ptr, plan_ptr, plan_len, 1)
-}
-
-#[ffm_safe]
-#[no_mangle]
-pub unsafe extern "C" fn df_execute_with_context_final(
-    session_ctx_ptr: i64,
-    plan_ptr: *const u8,
-    plan_len: i64,
-) -> i64 {
-    execute_with_context_mode(session_ctx_ptr, plan_ptr, plan_len, 2)
-}
-
-unsafe fn execute_with_context_mode(
-    session_ctx_ptr: i64,
-    plan_ptr: *const u8,
-    plan_len: i64,
-    mode: i32,
-) -> Result<i64, String> {
     let mgr = get_rt_manager()?;
     let plan_bytes = slice::from_raw_parts(plan_ptr, plan_len as usize);
     let cpu_executor = mgr.cpu_executor();
@@ -645,7 +623,6 @@ unsafe fn execute_with_context_mode(
             session_ctx_ptr,
             plan_bytes,
             cpu_executor,
-            mode,
         ))
         .map_err(|e| e.to_string())
 }
