@@ -75,7 +75,7 @@ public final class NativeBridge {
     private static final MethodHandle CREATE_SESSION_CONTEXT;
     private static final MethodHandle CLOSE_SESSION_CONTEXT;
     private static final MethodHandle EXECUTE_WITH_CONTEXT;
-    private static final MethodHandle SET_PARTIAL_AGGREGATE_MODE;
+    private static final MethodHandle PREPARE_PARTIAL_PLAN;
 
     static {
         SymbolLookup lib = NativeLibraryLoader.symbolLookup();
@@ -359,9 +359,9 @@ public final class NativeBridge {
             FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG)
         );
 
-        SET_PARTIAL_AGGREGATE_MODE = linker.downcallHandle(
-            lib.find("df_set_partial_aggregate_mode").orElseThrow(),
-            FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG)
+        PREPARE_PARTIAL_PLAN = linker.downcallHandle(
+            lib.find("df_prepare_partial_plan").orElseThrow(),
+            FunctionDescriptor.of(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG)
         );
     }
 
@@ -752,10 +752,11 @@ public final class NativeBridge {
     }
 
     /** Configures the SessionContext for partial aggregate mode. */
-    public static void setPartialAggregateMode(long sessionCtxPtr) {
+    /** Prepares a physical plan in partial aggregate mode on the SessionContext. */
+    public static void preparePartialPlan(long sessionCtxPtr, byte[] substraitPlan) {
         NativeHandle.validatePointer(sessionCtxPtr, "sessionContext");
         try (var call = new NativeCall()) {
-            call.invoke(SET_PARTIAL_AGGREGATE_MODE, sessionCtxPtr);
+            call.invoke(PREPARE_PARTIAL_PLAN, sessionCtxPtr, call.bytes(substraitPlan), (long) substraitPlan.length);
         }
     }
 

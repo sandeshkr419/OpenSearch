@@ -38,6 +38,7 @@ pub struct SessionContextHandle {
     pub object_metas: Arc<Vec<ObjectMeta>>,
     pub query_context: QueryTrackingContext,
     pub aggregate_mode: crate::agg_mode::Mode,
+    pub prepared_plan: Option<Arc<dyn datafusion::physical_plan::ExecutionPlan + Send + Sync>>,
 }
 
 /// Creates a SessionContext with per-query RuntimeEnv and registers the default
@@ -138,6 +139,7 @@ pub async unsafe fn create_session_context(
         object_metas: shard_view.object_metas.clone(),
         query_context,
         aggregate_mode: crate::agg_mode::Mode::Default,
+        prepared_plan: None,
     };
     Ok(Box::into_raw(Box::new(handle)) as i64)
 }
@@ -160,4 +162,23 @@ pub unsafe fn close_session_context(ptr: i64) {
 pub unsafe fn set_partial_aggregate_mode(ptr: i64) {
     let handle = &mut *(ptr as *mut SessionContextHandle);
     handle.aggregate_mode = crate::agg_mode::Mode::Partial;
+}
+
+/// Prepares a physical plan from Substrait bytes, applies the configured aggregate mode,
+/// and stores the result on the handle for later execution.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `create_session_context`.
+pub async unsafe fn prepare_plan(ptr: i64, plan_bytes: &[u8]) -> Result<(), datafusion::common::DataFusionError> {
+    use prost::Message;
+    use substrait::proto::Plan;
+    let handle = &mut *(ptr as *mut SessionContextHandle);
+    let substrait_plan = Plan::decode(plan_bytes)
+        .map_err(|e| datafusion::common::DataFusionError::Execution(format!("Failed to decode Substrait: {}", e)))?;
+    let logical_plan = datafusion_substrait::logical_plan::consumer::from_substrait_plan(&handle.ctx.state(), &substrait_plan).await?;
+    let dataframe = handle.ctx.execute_logical_plan(logical_plan).await?;
+    let physical_plan = dataframe.create_physical_plan().await?;
+    let physical_plan = crate::agg_mode::apply_aggregate_mode(physical_plan, handle.aggregate_mode)?;
+    handle.prepared_plan = Some(physical_plan);
+    Ok(())
 }

@@ -603,8 +603,18 @@ pub unsafe extern "C" fn df_close_session_context(ptr: i64) {
 
 #[ffm_safe]
 #[no_mangle]
-pub unsafe extern "C" fn df_set_partial_aggregate_mode(session_ctx_ptr: i64) -> i64 {
+pub unsafe extern "C" fn df_prepare_partial_plan(
+    session_ctx_ptr: i64,
+    plan_ptr: *const u8,
+    plan_len: i64,
+) -> i64 {
+    let mgr = get_rt_manager()?;
+    let plan_bytes = slice::from_raw_parts(plan_ptr, plan_len as usize);
+    // Set partial mode then prepare the plan
     crate::session_context::set_partial_aggregate_mode(session_ctx_ptr);
+    mgr.io_runtime
+        .block_on(crate::session_context::prepare_plan(session_ctx_ptr, plan_bytes))
+        .map_err(|e| e.to_string())?;
     Ok(0)
 }
 

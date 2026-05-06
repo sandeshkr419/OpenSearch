@@ -8,6 +8,7 @@
 
 package org.opensearch.be.datafusion;
 
+import org.opensearch.analytics.backend.ShardScanExecutionContext;
 import org.opensearch.analytics.spi.BackendExecutionContext;
 import org.opensearch.analytics.spi.CommonExecutionContext;
 import org.opensearch.analytics.spi.FragmentInstructionHandler;
@@ -15,8 +16,9 @@ import org.opensearch.analytics.spi.PartialAggregateInstructionNode;
 import org.opensearch.be.datafusion.nativelib.NativeBridge;
 
 /**
- * Handles PartialAggregate instruction: configures the native SessionContext
- * for partial aggregate mode so the Rust executor emits intermediate state.
+ * Handles PartialAggregate instruction: prepares the physical plan in partial
+ * aggregate mode on the native SessionContext. The prepared plan is stored on
+ * the handle and executed later by the searcher.
  */
 class PartialAggregateInstructionHandler implements FragmentInstructionHandler<PartialAggregateInstructionNode> {
 
@@ -27,7 +29,8 @@ class PartialAggregateInstructionHandler implements FragmentInstructionHandler<P
         BackendExecutionContext backendContext
     ) {
         DataFusionSessionState state = (DataFusionSessionState) backendContext;
-        NativeBridge.setPartialAggregateMode(state.sessionContextHandle().getPointer());
+        ShardScanExecutionContext ctx = (ShardScanExecutionContext) commonContext;
+        NativeBridge.preparePartialPlan(state.sessionContextHandle().getPointer(), ctx.getFragmentBytes());
         return state;
     }
 }

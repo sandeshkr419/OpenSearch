@@ -165,17 +165,19 @@ pub async unsafe fn execute_with_context(
     cpu_executor: DedicatedExecutor,
 ) -> Result<i64, DataFusionError> {
     let handle = *Box::from_raw(session_ctx_ptr as *mut SessionContextHandle);
-    let mode = handle.aggregate_mode;
 
-    let substrait_plan = Plan::decode(plan_bytes).map_err(|e| {
-        DataFusionError::Execution(format!("Failed to decode Substrait: {}", e))
-    })?;
-
-    let logical_plan = from_substrait_plan(&handle.ctx.state(), &substrait_plan).await?;
-    let dataframe = handle.ctx.execute_logical_plan(logical_plan).await?;
-    let mut physical_plan = dataframe.create_physical_plan().await?;
-
-    physical_plan = crate::agg_mode::apply_aggregate_mode(physical_plan, mode)?;
+    let physical_plan = if let Some(prepared) = handle.prepared_plan {
+        // Plan was already prepared by instruction handler — use it directly
+        prepared
+    } else {
+        // Fallback: decode and prepare on the fly (default mode, no forcing)
+        let substrait_plan = Plan::decode(plan_bytes).map_err(|e| {
+            DataFusionError::Execution(format!("Failed to decode Substrait: {}", e))
+        })?;
+        let logical_plan = from_substrait_plan(&handle.ctx.state(), &substrait_plan).await?;
+        let dataframe = handle.ctx.execute_logical_plan(logical_plan).await?;
+        dataframe.create_physical_plan().await?
+    };
 
     let df_stream = execute_stream(physical_plan, handle.ctx.task_ctx()).map_err(|e| {
         error!("execute_with_context: failed to create stream: {}", e);
