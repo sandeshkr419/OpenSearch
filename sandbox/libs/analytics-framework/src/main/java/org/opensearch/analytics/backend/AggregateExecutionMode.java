@@ -10,25 +10,13 @@ package org.opensearch.analytics.backend;
 
 /**
  * Aggregation execution mode passed from instruction handlers to the backend runtime.
- * The value maps directly to the FFI contract with the Rust backend:
- * 0 = DEFAULT, 1 = PARTIAL, 2 = FINAL.
+ * Used by NativeBridge to dispatch to the appropriate native execution function.
  */
 public enum AggregateExecutionMode {
     /** No mode forcing — plain scan or full aggregation. */
-    DEFAULT(0),
+    DEFAULT,
     /** Shard emits intermediate aggregate state (e.g. HLL sketch bytes, partial SUM+COUNT). */
-    PARTIAL(1),
+    PARTIAL,
     /** Coordinator merges partial state from shards into the final result. */
-    FINAL(2);
-
-    private final int value;
-
-    AggregateExecutionMode(int value) {
-        this.value = value;
-    }
-
-    /** Returns the FFI value for this mode (matches the Rust-side constant). */
-    public int value() {
-        return value;
-    }
+    FINAL
 }

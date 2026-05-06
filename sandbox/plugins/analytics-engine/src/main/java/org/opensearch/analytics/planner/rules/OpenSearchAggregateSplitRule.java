@@ -25,11 +25,25 @@ import org.opensearch.analytics.planner.rel.OpenSearchConvention;
  * trait enforcement (via {@code ExpandConversionRule} + {@code OpenSearchDistributionTraitDef})
  * automatically insert an {@code OpenSearchExchangeReducer}.
  *
- * <p>The aggregate calls are kept unchanged in both PARTIAL and FINAL — the backend's
- * {@code force_aggregate_mode} in Rust handles the actual mode forcing at execution time.
- * Schema differences between partial state and final output are resolved by
- * {@code intermediateFields} declarations on {@code AggregateCapability} and
- * {@code fixIntermediateInputTypes} in the fragment convertor.
+ * <p>TODO (plan forking): aggregate decomposition is intentionally deferred to plan forking
+ * resolution, after a single backend has been chosen per alternative. Decomposition is
+ * backend-specific — different backends may emit different partial state schemas for the
+ * same function (e.g. standard SUM+COUNT for AVG vs a backend's native running state).
+ * Applying decomposition here would force a single schema before backends are resolved,
+ * which breaks the multi-alternative model.
+ *
+ * <p>During plan forking resolution, for each PARTIAL+FINAL pair in a chosen-backend alternative:
+ * <ol>
+ *   <li>Look up {@link org.opensearch.analytics.spi.AggregateCapability#decomposition()} for
+ *       each AggregateCall using the chosen backend.</li>
+ *   <li>If null: apply Calcite's {@code AggregateReduceFunctionsRule} to rewrite
+ *       AVG → SUM/COUNT, STDDEV → SUM(x²)+SUM(x)+COUNT, etc.</li>
+ *   <li>If non-null: use {@code AggregateDecomposition.partialCalls()}
+ *       to rewrite PARTIAL's aggCalls and output row type, and
+ *       {@code AggregateDecomposition.finalExpression()} to
+ *       rewrite FINAL's aggCalls. Both must be updated together — the exchange row type
+ *       between them must be consistent within the same plan alternative.</li>
+ * </ol>
  *
  * @opensearch.internal
  */
@@ -53,6 +67,7 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
         OpenSearchAggregate aggregate = call.rel(0);
         RelNode child = call.rel(1);
 
+        // Partial aggregate: runs on each partition, keeps input's traits
         RelTraitSet partialTraits = child.getTraitSet().replace(OpenSearchConvention.INSTANCE);
         OpenSearchAggregate partial = new OpenSearchAggregate(
             aggregate.getCluster(),
@@ -65,9 +80,11 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
             aggregate.getViableBackends()
         );
 
+        // Request SINGLETON distribution — Volcano inserts Exchange automatically
         RelTraitSet singletonTraits = partial.getTraitSet().replace(context.getDistributionTraitDef().singleton());
         RelNode gathered = convert(partial, singletonTraits);
 
+        // Final aggregate: merges partial states at coordinator
         OpenSearchAggregate finalAggregate = new OpenSearchAggregate(
             aggregate.getCluster(),
             singletonTraits,

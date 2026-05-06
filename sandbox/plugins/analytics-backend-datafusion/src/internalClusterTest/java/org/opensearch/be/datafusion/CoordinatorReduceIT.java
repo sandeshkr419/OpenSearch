@@ -171,7 +171,8 @@ public class CoordinatorReduceIT extends OpenSearchIntegTestCase {
     }
 
     /**
-     * Tests AVG across shards using the decomposition path (SUM+COUNT partial, SUM/COUNT final).
+     * Tests AVG across shards using the intermediateFields path (partial emits count+sum,
+     * final computes sum/count).
      */
     public void testAvgAcrossShards() throws Exception {
         createParquetBackedIndex();

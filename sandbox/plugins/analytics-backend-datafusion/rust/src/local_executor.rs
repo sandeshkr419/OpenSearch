@@ -69,6 +69,7 @@ impl LocalSession {
             .with_config(SessionConfig::new())
             .with_runtime_env(runtime_env)
             .with_default_features()
+            .with_physical_optimizer_rules(crate::agg_mode::physical_optimizer_rules_without_combine())
             .build();
         Self {
             ctx: SessionContext::new_with_state(state),
@@ -156,7 +157,7 @@ impl LocalSession {
             return df.execute_stream().await;
         }
         let physical_plan = df.create_physical_plan().await?;
-        let physical_plan = crate::query_executor::apply_aggregate_mode(physical_plan, mode)?;
+        let physical_plan = crate::agg_mode::apply_aggregate_mode(physical_plan, mode)?;
         let task_ctx = self.ctx.task_ctx();
         datafusion::physical_plan::execute_stream(physical_plan, task_ctx)
     }

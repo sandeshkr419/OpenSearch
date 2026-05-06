@@ -12,7 +12,6 @@ import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexNode;
 import org.opensearch.analytics.spi.AggregateCapability;
-import org.opensearch.analytics.spi.AggregateDecomposition;
 import org.opensearch.analytics.spi.AggregateFunction;
 import org.opensearch.analytics.spi.AnalyticsSearchBackendPlugin;
 import org.opensearch.analytics.spi.BackendCapabilityProvider;
@@ -81,8 +80,7 @@ public class CapabilityRegistry {
 
     private final Function<IndexMetadata, FieldStorageResolver> fieldStorageFactory;
 
-    // Decomposition indexes: (backendName, AggregateFunction) → decomposition/intermediate/final
-    private final Map<DecompositionKey, AggregateDecomposition> decompositionIndex = new HashMap<>();
+    // Intermediate fields and final expression indexes: (backendName, AggregateFunction) → partial state
     private final Map<DecompositionKey, List<Field>> intermediateFieldsIndex = new HashMap<>();
     private final Map<DecompositionKey, BiFunction<RexBuilder, List<RexNode>, RexNode>> finalExpressionIndex = new HashMap<>();
 
@@ -157,9 +155,6 @@ public class CapabilityRegistry {
             for (AggregateCapability cap : caps.aggregateCapabilities()) {
                 for (FieldType fieldType : cap.fieldTypes()) {
                     addToFormatMap(aggregateIndex, new AggregateKey(cap.function(), fieldType), cap.formats(), name);
-                }
-                if (cap.decomposition() != null) {
-                    decompositionIndex.put(new DecompositionKey(name, cap.function()), cap.decomposition());
                 }
                 if (cap.intermediateFields() != null) {
                     intermediateFieldsIndex.put(new DecompositionKey(name, cap.function()), cap.intermediateFields());
@@ -373,12 +368,7 @@ public class CapabilityRegistry {
     private record DecompositionKey(String backendName, AggregateFunction function) {
     }
 
-    // ---- Decomposition lookups ----
-
-    @Nullable
-    public AggregateDecomposition getDecomposition(String backendName, AggregateFunction function) {
-        return decompositionIndex.get(new DecompositionKey(backendName, function));
-    }
+    // ---- Intermediate fields lookups ----
 
     @Nullable
     public List<Field> getIntermediateFields(String backendName, AggregateFunction function) {
