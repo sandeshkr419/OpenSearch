@@ -12,28 +12,38 @@ import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.plan.RelOptRuleCall;
 import org.apache.calcite.plan.RelTraitSet;
 import org.apache.calcite.rel.RelNode;
-import org.apache.calcite.rel.core.AggregateCall;
-import org.apache.calcite.rel.type.RelDataTypeFactory;
-import org.apache.calcite.sql.fun.SqlStdOperatorTable;
-import org.apache.calcite.sql.type.SqlTypeName;
 import org.opensearch.analytics.planner.PlannerContext;
 import org.opensearch.analytics.planner.rel.AggregateMode;
 import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
 import org.opensearch.analytics.planner.rel.OpenSearchConvention;
-import org.opensearch.analytics.spi.AggregateFunction;
-
-import java.util.ArrayList;
-import java.util.List;
 
 /**
- * Splits an {@link OpenSearchAggregate}(SINGLE) into PARTIAL + Exchange + FINAL.
+ * Volcano CBO rule that splits an {@link OpenSearchAggregate} into
+ * PARTIAL + FINAL when the input is partitioned.
  *
- * <p>PARTIAL aggCalls are decomposed for multi-field intermediate state:
- * AVG(x) → COUNT(x) + SUM(x), so the Calcite row type matches DataFusion's partial output.
- * All other functions keep their original call for partial.
+ * <p>Requests SINGLETON distribution on the partial output, letting Volcano's
+ * trait enforcement (via {@code ExpandConversionRule} + {@code OpenSearchDistributionTraitDef})
+ * automatically insert an {@code OpenSearchExchangeReducer}.
  *
- * <p>FINAL aggCalls keep the original calls adapted to reference the partial output columns.
- * DataFusion handles the partial→final merge internally for each aggregate function.
+ * <p>TODO (plan forking): aggregate decomposition is intentionally deferred to plan forking
+ * resolution, after a single backend has been chosen per alternative. Decomposition is
+ * backend-specific — different backends may emit different partial state schemas for the
+ * same function (e.g. standard SUM+COUNT for AVG vs a backend's native running state).
+ * Applying decomposition here would force a single schema before backends are resolved,
+ * which breaks the multi-alternative model.
+ *
+ * <p>During plan forking resolution, for each PARTIAL+FINAL pair in a chosen-backend alternative:
+ * <ol>
+ *   <li>Look up {@link org.opensearch.analytics.spi.AggregateCapability#decomposition()} for
+ *       each AggregateCall using the chosen backend.</li>
+ *   <li>If null: apply Calcite's {@code AggregateReduceFunctionsRule} to rewrite
+ *       AVG → SUM/COUNT, STDDEV → SUM(x²)+SUM(x)+COUNT, etc.</li>
+ *   <li>If non-null: use {@code AggregateDecomposition.partialCalls()}
+ *       to rewrite PARTIAL's aggCalls and output row type, and
+ *       {@code AggregateDecomposition.finalExpression()} to
+ *       rewrite FINAL's aggCalls. Both must be updated together — the exchange row type
+ *       between them must be consistent within the same plan alternative.</li>
+ * </ol>
  *
  * @opensearch.internal
  */
@@ -56,79 +66,36 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
     public void onMatch(RelOptRuleCall call) {
         OpenSearchAggregate aggregate = call.rel(0);
         RelNode child = call.rel(1);
-        int groupCount = aggregate.getGroupSet().cardinality();
-        RelDataTypeFactory typeFactory = aggregate.getCluster().getTypeFactory();
 
-        // Build partial aggCalls. For AVG (multi-field intermediate), expand to COUNT + SUM
-        // so the Calcite row type matches DataFusion's actual partial output schema.
-        List<AggregateCall> partialCalls = new ArrayList<>();
-        int[] partialStart = new int[aggregate.getAggCallList().size()];
-
-        for (int i = 0; i < aggregate.getAggCallList().size(); i++) {
-            AggregateCall origCall = aggregate.getAggCallList().get(i);
-            AggregateFunction func = AggregateFunction.fromAggregateCall(origCall);
-            List<org.apache.arrow.vector.types.pojo.Field> iFields = func != null ? func.getIntermediateFields() : null;
-            partialStart[i] = partialCalls.size();
-
-            if (iFields != null && iFields.size() > 1) {
-                // Multi-field intermediate state (e.g. AVG → COUNT + SUM).
-                // Use the types from intermediateFields to match DataFusion's partial output.
-                for (int j = 0; j < iFields.size(); j++) {
-                    var iField = iFields.get(j);
-                    var colType = arrowToCalcite(iField.getFieldType().getType(), typeFactory);
-                    var aggFn = j == 0 ? SqlStdOperatorTable.COUNT : SqlStdOperatorTable.SUM;
-                    partialCalls.add(AggregateCall.create(
-                        aggFn, false, false, false,
-                        List.of(), origCall.getArgList(), -1, null,
-                        org.apache.calcite.rel.RelCollations.EMPTY,
-                        colType,
-                        origCall.name + iField.getName()
-                    ));
-                }
-            } else {
-                partialCalls.add(origCall.withName(origCall.name));
-            }
-        }
-
+        // Partial aggregate: runs on each partition, keeps input's traits
         RelTraitSet partialTraits = child.getTraitSet().replace(OpenSearchConvention.INSTANCE);
         OpenSearchAggregate partial = new OpenSearchAggregate(
-            aggregate.getCluster(), partialTraits, child,
-            aggregate.getGroupSet(), aggregate.getGroupSets(),
-            partialCalls, AggregateMode.PARTIAL, aggregate.getViableBackends()
+            aggregate.getCluster(),
+            partialTraits,
+            child,
+            aggregate.getGroupSet(),
+            aggregate.getGroupSets(),
+            aggregate.getAggCallList(),
+            AggregateMode.PARTIAL,
+            aggregate.getViableBackends()
         );
 
+        // Request SINGLETON distribution — Volcano inserts Exchange automatically
         RelTraitSet singletonTraits = partial.getTraitSet().replace(context.getDistributionTraitDef().singleton());
         RelNode gathered = convert(partial, singletonTraits);
 
-        // Build final aggCalls: keep original calls adapted to reference partial output columns.
-        // DataFusion handles the partial→final merge internally.
-        List<AggregateCall> finalCalls = new ArrayList<>();
-        for (int i = 0; i < aggregate.getAggCallList().size(); i++) {
-            AggregateCall origCall = aggregate.getAggCallList().get(i);
-            int colIdx = groupCount + partialStart[i];
-            finalCalls.add(origCall.adaptTo(gathered, List.of(colIdx), origCall.filterArg, groupCount, groupCount));
-        }
-
+        // Final aggregate: merges partial states at coordinator
         OpenSearchAggregate finalAggregate = new OpenSearchAggregate(
-            aggregate.getCluster(), singletonTraits, gathered,
-            aggregate.getGroupSet(), aggregate.getGroupSets(),
-            finalCalls, AggregateMode.FINAL, aggregate.getViableBackends()
+            aggregate.getCluster(),
+            singletonTraits,
+            gathered,
+            aggregate.getGroupSet(),
+            aggregate.getGroupSets(),
+            aggregate.getAggCallList(),
+            AggregateMode.FINAL,
+            aggregate.getViableBackends()
         );
 
         call.transformTo(finalAggregate);
-    }
-
-    /** Converts an Arrow type to a nullable Calcite type. */
-    private static org.apache.calcite.rel.type.RelDataType arrowToCalcite(
-        org.apache.arrow.vector.types.pojo.ArrowType arrowType,
-        RelDataTypeFactory typeFactory
-    ) {
-        if (arrowType instanceof org.apache.arrow.vector.types.pojo.ArrowType.Int i && i.getBitWidth() == 64) {
-            return typeFactory.createSqlType(SqlTypeName.BIGINT);
-        }
-        if (arrowType instanceof org.apache.arrow.vector.types.pojo.ArrowType.FloatingPoint) {
-            return typeFactory.createSqlType(SqlTypeName.DOUBLE);
-        }
-        return typeFactory.createSqlType(SqlTypeName.VARBINARY, Integer.MAX_VALUE);
     }
 }

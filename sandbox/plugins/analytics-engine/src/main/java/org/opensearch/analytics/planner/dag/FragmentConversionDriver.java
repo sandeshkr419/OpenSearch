@@ -111,7 +111,10 @@ public class FragmentConversionDriver {
                 : FilterTreeShape.NO_DELEGATION;
 
             IntraOperatorDelegationBytes delegationBytes = new IntraOperatorDelegationBytes(registry);
-            byte[] bytes = convert(plan.resolvedFragment(), convertor, delegationBytes);
+            // Decompose FINAL aggregate: rewrite args to reference partial state columns,
+            // expand AVG → SUM+SUM+Project. DC is kept unchanged (handled by fixIntermediateInputTypes).
+            RelNode fragment = DAGBuilder.decomposeFinalFragment(plan.resolvedFragment());
+            byte[] bytes = convert(fragment, convertor, delegationBytes);
 
             // Assemble instruction list
             List<InstructionNode> instructions = assembleInstructions(backend, plan, treeShape, delegationBytes);
@@ -281,7 +284,7 @@ public class FragmentConversionDriver {
         if (node instanceof OpenSearchExchangeReducer) {
             // Strip ExchangeReducer — StageInputScan below it is the schema source
             // This should never be reached directly; handled by the parent (final agg)
-            return convertor.convertFinalAggFragment(strip(node.getInputs().getFirst(), delegationBytes));
+            return convertor.convertFinalAggFragment(fixIntermediateInputTypes(strip(node.getInputs().getFirst(), delegationBytes)));
         }
         if (node instanceof OpenSearchRelNode openSearchNode) {
             List<RelNode> strippedInputs = node.getInputs().stream().map(input -> strip(input, delegationBytes)).toList();
@@ -305,13 +308,21 @@ public class FragmentConversionDriver {
                         finalAggInputs.add(strip(input.getInputs().getFirst(), delegationBytes));
                     }
                     RelNode finalAggFragment = openSearchNode.stripAnnotations(finalAggInputs, resolver);
-                    return convertor.convertFinalAggFragment(finalAggFragment);
+                    return convertor.convertFinalAggFragment(fixIntermediateInputTypes(finalAggFragment));
                 }
             }
 
             // Operator above the final-fragment boundary — convert child first, then attach.
             byte[] innerBytes = convertReduceNode(node.getInputs().getFirst(), convertor, false, delegationBytes);
             return convertor.attachFragmentOnTop(strippedNode, innerBytes);
+        }
+        if (node instanceof LogicalProject project) {
+            // LogicalProject wrapping a decomposed FINAL aggregate (e.g. AVG → SUM+SUM+DIV).
+            byte[] innerBytes = convertReduceNode(project.getInput(), convertor, false, delegationBytes);
+            // Rebuild project with stripped input (ExchangeReducer already handled by inner convert)
+            RelNode strippedInner = strip(project.getInput(), delegationBytes);
+            RelNode strippedProject = project.copy(project.getTraitSet(), List.of(strippedInner));
+            return convertor.attachFragmentOnTop(strippedProject, innerBytes);
         }
         throw new IllegalStateException("Unexpected reduce stage node: " + node.getClass().getSimpleName());
     }
