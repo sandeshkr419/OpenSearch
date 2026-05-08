@@ -327,7 +327,7 @@ public class DAGBuilder {
                     int colIdx = groupCount + newCalls.size();
                     boolean isSingleFieldWithFinalExpr = iFields != null && iFields.size() == 1 && finalExpr != null;
                     if (hasBinary) {
-                        newCalls.add(call); // DC: keep original
+                        newCalls.add(call); // DC: keep original — fixIntermediateInputTypes handles scan rewriting
                         finalExprs.add(null);
                     } else if (isSingleFieldWithFinalExpr) {
                         // COUNT: SUM the partial count (no Project needed — type difference is fine for DataFusion)
