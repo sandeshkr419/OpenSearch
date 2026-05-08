@@ -225,20 +225,14 @@ public class DAGBuilder {
      * StageInputScan row type: VARBINARY for DC (DataFusion emits Binary sketch),
      * Calcite row type for all other functions.
      */
-    private static RelDataType intermediateRowType(RelNode partialFragment, RelDataTypeFactory typeFactory) {
+    public static RelDataType intermediateRowType(RelNode partialFragment, RelDataTypeFactory typeFactory) {
         OpenSearchAggregate agg = findPartialAggregate(partialFragment);
         if (agg == null) return partialFragment.getRowType();
 
         boolean needsOverride = agg.getAggCallList()
             .stream()
             .map(AggregateFunction::fromAggregateCall)
-            .anyMatch(
-                f -> f != null
-                    && f.getIntermediateFields() != null
-                    && f.getIntermediateFields()
-                        .stream()
-                        .anyMatch(iField -> iField.getFieldType().getType() instanceof org.apache.arrow.vector.types.pojo.ArrowType.Binary)
-            );
+            .anyMatch(f -> f != null && f.hasBinaryIntermediateField());
         if (!needsOverride) return agg.getRowType();
 
         List<RelDataType> types = new ArrayList<>();
@@ -252,12 +246,12 @@ public class DAGBuilder {
         int colIdx = groupCount;
         for (AggregateCall call : agg.getAggCallList()) {
             AggregateFunction func = AggregateFunction.fromAggregateCall(call);
-            var iFields = func != null ? func.getIntermediateFields() : null;
             var f = agg.getRowType().getFieldList().get(colIdx++);
-            boolean hasBinary = iFields != null
-                && iFields.stream()
-                    .anyMatch(iField -> iField.getFieldType().getType() instanceof org.apache.arrow.vector.types.pojo.ArrowType.Binary);
-            types.add(hasBinary ? typeFactory.createSqlType(SqlTypeName.VARBINARY, Integer.MAX_VALUE) : f.getType());
+            types.add(
+                func != null && func.hasBinaryIntermediateField()
+                    ? typeFactory.createSqlType(SqlTypeName.VARBINARY, Integer.MAX_VALUE)
+                    : f.getType()
+            );
             names.add(f.getName());
         }
         return typeFactory.createStructType(types, names);
@@ -319,11 +313,7 @@ public class DAGBuilder {
                     // DC (hasBinary): keep original call — DataFusion reads sketch by position
                     // COUNT (single-field intermediate, finalExpr != null): use SUM to merge partial counts
                     // SUM (no intermediateFields): rewrite arg to reference partial state column
-                    boolean hasBinary = iFields != null
-                        && iFields.stream()
-                            .anyMatch(
-                                iField -> iField.getFieldType().getType() instanceof org.apache.arrow.vector.types.pojo.ArrowType.Binary
-                            );
+                    boolean hasBinary = func != null && func.hasBinaryIntermediateField();
                     int colIdx = groupCount + newCalls.size();
                     boolean isSingleFieldWithFinalExpr = iFields != null && iFields.size() == 1 && finalExpr != null;
                     if (hasBinary) {

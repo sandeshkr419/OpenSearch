@@ -117,6 +117,13 @@ public enum AggregateFunction {
         return intermediateFields;
     }
 
+    /** Returns true if any intermediate field has Binary type (e.g. DC emits an HLL sketch). */
+    public boolean hasBinaryIntermediateField() {
+        return intermediateFields != null
+            && intermediateFields.stream()
+                .anyMatch(f -> f.getFieldType().getType() instanceof org.apache.arrow.vector.types.pojo.ArrowType.Binary);
+    }
+
     /** Returns the expression to compute the final result from intermediate columns, or null. */
     public BiFunction<RexBuilder, List<RexNode>, RexNode> getFinalExpression() {
         return finalExpression;
