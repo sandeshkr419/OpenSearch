@@ -281,7 +281,7 @@ public class DAGBuilder {
                         newCalls.add(call); // DC: keep original
                         finalExprs.add(null);
                     } else if (isSingleFieldWithFinalExpr) {
-                        // COUNT: SUM the partial count, Project passes through with original type
+                        // COUNT: SUM the partial count (no Project needed — type difference is fine for DataFusion)
                         var colType = agg.getInput().getRowType().getFieldList().get(colIdx).getType();
                         var binding = new org.apache.calcite.rel.core.Aggregate.AggCallBinding(
                             typeFactory, SqlStdOperatorTable.SUM, List.of(colType), groupCount, false
@@ -292,8 +292,7 @@ public class DAGBuilder {
                             SqlStdOperatorTable.SUM.inferReturnType(binding),
                             call.name
                         ));
-                        finalExprs.add((rb, refs) -> refs.get(0)); // identity
-                        needsProject = true;
+                        finalExprs.add(null); // no Project — SUM result used directly
                     } else {
                         newCalls.add(call.withArgList(List.of(colIdx))); // SUM: rewrite arg
                         finalExprs.add(null);
