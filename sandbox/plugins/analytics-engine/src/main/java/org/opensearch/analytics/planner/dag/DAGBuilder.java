@@ -96,7 +96,10 @@ public class DAGBuilder {
         if (node.getInputs().isEmpty()) return node;
         boolean changed = false;
         for (int i = 0; i < newInputs.size(); i++) {
-            if (newInputs.get(i) != node.getInputs().get(i)) { changed = true; break; }
+            if (newInputs.get(i) != node.getInputs().get(i)) {
+                changed = true;
+                break;
+            }
         }
         return changed ? node.copy(node.getTraitSet(), newInputs) : node;
     }
@@ -126,10 +129,7 @@ public class DAGBuilder {
         );
 
         // StageInputScan row type: use intermediateFields for DC (VARBINARY), Calcite type for others
-        RelDataType stageInputRowType = intermediateRowType(
-            decomposedChildFragment,
-            reducer.getCluster().getTypeFactory()
-        );
+        RelDataType stageInputRowType = intermediateRowType(decomposedChildFragment, reducer.getCluster().getTypeFactory());
 
         OpenSearchStageInputScan stageInput = new OpenSearchStageInputScan(
             reducer.getCluster(),
@@ -147,7 +147,8 @@ public class DAGBuilder {
      */
     private static RelNode decomposePartialFragment(RelNode node) {
         if (node instanceof OpenSearchAggregate agg && agg.getMode() == AggregateMode.PARTIAL) {
-            boolean needsDecomposition = agg.getAggCallList().stream()
+            boolean needsDecomposition = agg.getAggCallList()
+                .stream()
                 .map(AggregateFunction::fromAggregateCall)
                 .anyMatch(f -> f != null && f.getIntermediateFields() != null && f.getIntermediateFields().size() > 1);
             if (!needsDecomposition) return node;
@@ -161,29 +162,56 @@ public class DAGBuilder {
                 if (iFields != null && iFields.size() > 1) {
                     // AVG → COUNT(x) + SUM(x)
                     var inputType = agg.getInput().getRowType().getFieldList().get(call.getArgList().get(0)).getType();
-                    newCalls.add(AggregateCall.create(
-                        SqlStdOperatorTable.COUNT, false, false, false,
-                        List.of(), call.getArgList(), -1, null, RelCollations.EMPTY,
-                        typeFactory.createSqlType(SqlTypeName.BIGINT),
-                        call.name + iFields.get(0).getName()
-                    ));
-                    var sumBinding = new org.apache.calcite.rel.core.Aggregate.AggCallBinding(
-                        typeFactory, SqlStdOperatorTable.SUM, List.of(inputType), groupCount, false
+                    newCalls.add(
+                        AggregateCall.create(
+                            SqlStdOperatorTable.COUNT,
+                            false,
+                            false,
+                            false,
+                            List.of(),
+                            call.getArgList(),
+                            -1,
+                            null,
+                            RelCollations.EMPTY,
+                            typeFactory.createSqlType(SqlTypeName.BIGINT),
+                            call.name + iFields.get(0).getName()
+                        )
                     );
-                    newCalls.add(AggregateCall.create(
-                        SqlStdOperatorTable.SUM, false, false, false,
-                        List.of(), call.getArgList(), -1, null, RelCollations.EMPTY,
-                        SqlStdOperatorTable.SUM.inferReturnType(sumBinding),
-                        call.name + iFields.get(1).getName()
-                    ));
+                    var sumBinding = new org.apache.calcite.rel.core.Aggregate.AggCallBinding(
+                        typeFactory,
+                        SqlStdOperatorTable.SUM,
+                        List.of(inputType),
+                        groupCount,
+                        false
+                    );
+                    newCalls.add(
+                        AggregateCall.create(
+                            SqlStdOperatorTable.SUM,
+                            false,
+                            false,
+                            false,
+                            List.of(),
+                            call.getArgList(),
+                            -1,
+                            null,
+                            RelCollations.EMPTY,
+                            SqlStdOperatorTable.SUM.inferReturnType(sumBinding),
+                            call.name + iFields.get(1).getName()
+                        )
+                    );
                 } else {
                     newCalls.add(call);
                 }
             }
             return new OpenSearchAggregate(
-                agg.getCluster(), agg.getTraitSet(), agg.getInput(),
-                agg.getGroupSet(), agg.getGroupSets(),
-                newCalls, AggregateMode.PARTIAL, agg.getViableBackends()
+                agg.getCluster(),
+                agg.getTraitSet(),
+                agg.getInput(),
+                agg.getGroupSet(),
+                agg.getGroupSets(),
+                newCalls,
+                AggregateMode.PARTIAL,
+                agg.getViableBackends()
             );
         }
         if (node.getInputs().size() == 1) {
@@ -201,12 +229,16 @@ public class DAGBuilder {
         OpenSearchAggregate agg = findPartialAggregate(partialFragment);
         if (agg == null) return partialFragment.getRowType();
 
-        boolean needsOverride = agg.getAggCallList().stream()
+        boolean needsOverride = agg.getAggCallList()
+            .stream()
             .map(AggregateFunction::fromAggregateCall)
-            .anyMatch(f -> f != null && f.getIntermediateFields() != null
-                && f.getIntermediateFields().stream().anyMatch(
-                    iField -> iField.getFieldType().getType() instanceof org.apache.arrow.vector.types.pojo.ArrowType.Binary
-                ));
+            .anyMatch(
+                f -> f != null
+                    && f.getIntermediateFields() != null
+                    && f.getIntermediateFields()
+                        .stream()
+                        .anyMatch(iField -> iField.getFieldType().getType() instanceof org.apache.arrow.vector.types.pojo.ArrowType.Binary)
+            );
         if (!needsOverride) return agg.getRowType();
 
         List<RelDataType> types = new ArrayList<>();
@@ -222,8 +254,9 @@ public class DAGBuilder {
             AggregateFunction func = AggregateFunction.fromAggregateCall(call);
             var iFields = func != null ? func.getIntermediateFields() : null;
             var f = agg.getRowType().getFieldList().get(colIdx++);
-            boolean hasBinary = iFields != null && iFields.stream()
-                .anyMatch(iField -> iField.getFieldType().getType() instanceof org.apache.arrow.vector.types.pojo.ArrowType.Binary);
+            boolean hasBinary = iFields != null
+                && iFields.stream()
+                    .anyMatch(iField -> iField.getFieldType().getType() instanceof org.apache.arrow.vector.types.pojo.ArrowType.Binary);
             types.add(hasBinary ? typeFactory.createSqlType(SqlTypeName.VARBINARY, Integer.MAX_VALUE) : f.getType());
             names.add(f.getName());
         }
@@ -257,14 +290,27 @@ public class DAGBuilder {
                         int colIdx = groupCount + newCalls.size();
                         var colType = agg.getInput().getRowType().getFieldList().get(colIdx).getType();
                         var binding = new org.apache.calcite.rel.core.Aggregate.AggCallBinding(
-                            typeFactory, SqlStdOperatorTable.SUM, List.of(colType), groupCount, false
+                            typeFactory,
+                            SqlStdOperatorTable.SUM,
+                            List.of(colType),
+                            groupCount,
+                            false
                         );
-                        newCalls.add(AggregateCall.create(
-                            SqlStdOperatorTable.SUM, false, false, false,
-                            List.of(), List.of(colIdx), -1, null, RelCollations.EMPTY,
-                            SqlStdOperatorTable.SUM.inferReturnType(binding),
-                            call.name + iFields.get(j).getName()
-                        ));
+                        newCalls.add(
+                            AggregateCall.create(
+                                SqlStdOperatorTable.SUM,
+                                false,
+                                false,
+                                false,
+                                List.of(),
+                                List.of(colIdx),
+                                -1,
+                                null,
+                                RelCollations.EMPTY,
+                                SqlStdOperatorTable.SUM.inferReturnType(binding),
+                                call.name + iFields.get(j).getName()
+                            )
+                        );
                     }
                     finalExprs.add(finalExpr);
                     needsProject = true;
@@ -273,8 +319,11 @@ public class DAGBuilder {
                     // DC (hasBinary): keep original call — DataFusion reads sketch by position
                     // COUNT (single-field intermediate, finalExpr != null): use SUM to merge partial counts
                     // SUM (no intermediateFields): rewrite arg to reference partial state column
-                    boolean hasBinary = iFields != null && iFields.stream()
-                        .anyMatch(iField -> iField.getFieldType().getType() instanceof org.apache.arrow.vector.types.pojo.ArrowType.Binary);
+                    boolean hasBinary = iFields != null
+                        && iFields.stream()
+                            .anyMatch(
+                                iField -> iField.getFieldType().getType() instanceof org.apache.arrow.vector.types.pojo.ArrowType.Binary
+                            );
                     int colIdx = groupCount + newCalls.size();
                     boolean isSingleFieldWithFinalExpr = iFields != null && iFields.size() == 1 && finalExpr != null;
                     if (hasBinary) {
@@ -284,14 +333,27 @@ public class DAGBuilder {
                         // COUNT: SUM the partial count (no Project needed — type difference is fine for DataFusion)
                         var colType = agg.getInput().getRowType().getFieldList().get(colIdx).getType();
                         var binding = new org.apache.calcite.rel.core.Aggregate.AggCallBinding(
-                            typeFactory, SqlStdOperatorTable.SUM, List.of(colType), groupCount, false
+                            typeFactory,
+                            SqlStdOperatorTable.SUM,
+                            List.of(colType),
+                            groupCount,
+                            false
                         );
-                        newCalls.add(AggregateCall.create(
-                            SqlStdOperatorTable.SUM, false, false, false,
-                            List.of(), List.of(colIdx), -1, null, RelCollations.EMPTY,
-                            SqlStdOperatorTable.SUM.inferReturnType(binding),
-                            call.name
-                        ));
+                        newCalls.add(
+                            AggregateCall.create(
+                                SqlStdOperatorTable.SUM,
+                                false,
+                                false,
+                                false,
+                                List.of(),
+                                List.of(colIdx),
+                                -1,
+                                null,
+                                RelCollations.EMPTY,
+                                SqlStdOperatorTable.SUM.inferReturnType(binding),
+                                call.name
+                            )
+                        );
                         finalExprs.add(null); // no Project — SUM result used directly
                     } else {
                         newCalls.add(call.withArgList(List.of(colIdx))); // SUM: rewrite arg
@@ -301,9 +363,14 @@ public class DAGBuilder {
             }
 
             OpenSearchAggregate newAgg = new OpenSearchAggregate(
-                agg.getCluster(), agg.getTraitSet(), agg.getInput(),
-                agg.getGroupSet(), agg.getGroupSets(),
-                newCalls, AggregateMode.FINAL, agg.getViableBackends()
+                agg.getCluster(),
+                agg.getTraitSet(),
+                agg.getInput(),
+                agg.getGroupSet(),
+                agg.getGroupSets(),
+                newCalls,
+                AggregateMode.FINAL,
+                agg.getViableBackends()
             );
 
             if (!needsProject) return newAgg;
@@ -334,8 +401,9 @@ public class DAGBuilder {
                 } else {
                     projectExprs.add(rexBuilder.makeInputRef(newAgg, aggColIdx++));
                 }
-                projectNames.add(origCall.name != null ? origCall.name
-                    : agg.getRowType().getFieldList().get(groupCount + origIdx - 1).getName());
+                projectNames.add(
+                    origCall.name != null ? origCall.name : agg.getRowType().getFieldList().get(groupCount + origIdx - 1).getName()
+                );
             }
             return LogicalProject.create(newAgg, List.of(), projectExprs, agg.getRowType());
         }

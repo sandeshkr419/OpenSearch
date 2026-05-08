@@ -10,7 +10,6 @@ package org.opensearch.analytics.planner.dag;
 
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
-import org.apache.calcite.rel.RelCollations;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.rel.logical.LogicalAggregate;
@@ -287,6 +286,19 @@ public class FragmentConversionDriver {
             return convertor.convertFinalAggFragment(fixIntermediateInputTypes(strip(node.getInputs().getFirst(), delegationBytes)));
         }
         if (node instanceof OpenSearchRelNode openSearchNode) {
+            // If the single input is a LogicalProject (from decomposeFinalFragment for AVG),
+            // process the LogicalProject first, then attach the outer OpenSearchNode on top.
+            if (node.getInputs().size() == 1 && node.getInputs().get(0) instanceof LogicalProject innerProject) {
+                byte[] innerBytes = convertReduceNode(innerProject, convertor, false, delegationBytes);
+                // Strip the inner aggregate for the outer node's stripped input
+                RelNode strippedInnerAgg = strip(innerProject.getInput(), delegationBytes);
+                RelNode strippedInnerProject = innerProject.copy(innerProject.getTraitSet(), List.of(strippedInnerAgg));
+                byte[] projectBytes = convertor.attachFragmentOnTop(strippedInnerProject, innerBytes);
+                // Attach the outer OpenSearchNode using its stripped version with the project as child
+                // Use empty resolver since the child is LogicalProject (no OpenSearchRelNode annotations)
+                RelNode strippedNode = openSearchNode.stripAnnotations(List.of(strippedInnerProject), annotation -> null);
+                return convertor.attachFragmentOnTop(strippedNode, projectBytes);
+            }
             List<RelNode> strippedInputs = node.getInputs().stream().map(input -> strip(input, delegationBytes)).toList();
             Function<OperatorAnnotation, RexNode> resolver = delegationBytes.resolverFor(openSearchNode, node.getCluster().getRexBuilder());
             RelNode strippedNode = openSearchNode.stripAnnotations(strippedInputs, resolver);

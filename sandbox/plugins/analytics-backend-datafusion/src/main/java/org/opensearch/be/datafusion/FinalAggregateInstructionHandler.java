@@ -14,7 +14,6 @@ import org.opensearch.analytics.spi.ExchangeSinkContext;
 import org.opensearch.analytics.spi.FinalAggregateInstructionNode;
 import org.opensearch.analytics.spi.FragmentInstructionHandler;
 import org.opensearch.be.datafusion.nativelib.NativeBridge;
-import org.opensearch.be.datafusion.ArrowSchemaIpc;
 
 import java.util.LinkedHashMap;
 import java.util.Map;

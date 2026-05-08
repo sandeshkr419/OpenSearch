@@ -108,12 +108,16 @@ final class LocalStageScheduler implements StageScheduler {
         if (agg == null) return ArrowSchemaFromCalcite.arrowSchemaFromRowType(rowType);
 
         // Override only for functions with Binary intermediate fields (DC)
-        boolean needsOverride = agg.getAggCallList().stream()
+        boolean needsOverride = agg.getAggCallList()
+            .stream()
             .map(AggregateFunction::fromAggregateCall)
-            .anyMatch(f -> f != null && f.getIntermediateFields() != null
-                && f.getIntermediateFields().stream().anyMatch(
-                    iField -> iField.getFieldType().getType() instanceof org.apache.arrow.vector.types.pojo.ArrowType.Binary
-                ));
+            .anyMatch(
+                f -> f != null
+                    && f.getIntermediateFields() != null
+                    && f.getIntermediateFields()
+                        .stream()
+                        .anyMatch(iField -> iField.getFieldType().getType() instanceof org.apache.arrow.vector.types.pojo.ArrowType.Binary)
+            );
         if (!needsOverride) return ArrowSchemaFromCalcite.arrowSchemaFromRowType(rowType);
 
         List<Field> fields = new ArrayList<>();
@@ -126,8 +130,9 @@ final class LocalStageScheduler implements StageScheduler {
             var func = AggregateFunction.fromAggregateCall(call);
             var iFields = func != null ? func.getIntermediateFields() : null;
             var f = rowType.getFieldList().get(colIdx++);
-            boolean hasBinary = iFields != null && iFields.stream()
-                .anyMatch(iField -> iField.getFieldType().getType() instanceof org.apache.arrow.vector.types.pojo.ArrowType.Binary);
+            boolean hasBinary = iFields != null
+                && iFields.stream()
+                    .anyMatch(iField -> iField.getFieldType().getType() instanceof org.apache.arrow.vector.types.pojo.ArrowType.Binary);
             if (hasBinary) {
                 // DC: use Binary to match DataFusion's partial HLL sketch output
                 for (var iField : iFields) {
