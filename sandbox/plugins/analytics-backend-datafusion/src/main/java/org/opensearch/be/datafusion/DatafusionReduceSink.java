@@ -119,6 +119,7 @@ public final class DatafusionReduceSink extends AbstractDatafusionReduceSink imp
         try {
             for (Map.Entry<Integer, byte[]> child : childInputs.entrySet()) {
                 int childStageId = child.getKey();
+                // In the test constructor, childInputs contains pre-computed schema IPC bytes
                 byte[] schemaIpc = child.getValue();
                 long senderPtr = NativeBridge.registerPartitionStream(session.getPointer(), inputIdFor(childStageId), schemaIpc);
                 senders.put(childStageId, new DatafusionPartitionSender(senderPtr));

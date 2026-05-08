@@ -14,6 +14,7 @@ import org.opensearch.analytics.spi.ExchangeSinkContext;
 import org.opensearch.analytics.spi.FinalAggregateInstructionNode;
 import org.opensearch.analytics.spi.FragmentInstructionHandler;
 import org.opensearch.be.datafusion.nativelib.NativeBridge;
+import org.opensearch.be.datafusion.ArrowSchemaIpc;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -41,7 +42,7 @@ class FinalAggregateInstructionHandler implements FragmentInstructionHandler<Fin
         NativeRuntimeHandle runtime = plugin.getDataFusionService().getNativeRuntime();
         DatafusionLocalSession session = new DatafusionLocalSession(runtime.get());
 
-        // Register streaming partitions — same logic as DatafusionReduceSink previously did
+        // Register streaming partitions using schema derived from child fragment
         Map<Integer, DatafusionPartitionSender> senders = new LinkedHashMap<>(ctx.childInputs().size());
         for (ExchangeSinkContext.ChildInput child : ctx.childInputs()) {
             byte[] schemaIpc = ArrowSchemaIpc.toBytes(child.schema());

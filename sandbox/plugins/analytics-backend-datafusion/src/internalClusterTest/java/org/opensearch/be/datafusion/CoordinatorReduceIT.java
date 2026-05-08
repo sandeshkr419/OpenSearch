@@ -239,6 +239,29 @@ public class CoordinatorReduceIT extends OpenSearchIntegTestCase {
         assertEquals("grouped agg must return exactly 1 group", 1, response.getRows().size());
     }
 
+    /**
+     * Q10 shape: sum + count + avg + dc with GROUP BY across shards.
+     * Mirrors: stats sum(AdvEngineID), count() as c, avg(ResolutionWidth), dc(UserID) by RegionID
+     * All docs have value=7 → 1 group.
+     */
+    public void testQ10ShapeAcrossShards() throws Exception {
+        createParquetBackedIndex();
+        indexDeterministicDocs();
+
+        PPLResponse response = executePPL(
+            "source = " + INDEX + " | stats sum(value) as s, count() as c, avg(value) as a, dc(value) as d by value"
+        );
+
+        assertNotNull("PPLResponse must not be null", response);
+        assertEquals("Q10-shape must return exactly 1 group", 1, response.getRows().size());
+
+        Object[] row = response.getRows().get(0);
+        long totalDocs = (long) NUM_SHARDS * DOCS_PER_SHARD;
+        assertEquals("SUM", (long) VALUE * totalDocs, ((Number) row[response.getColumns().indexOf("s")]).longValue());
+        assertEquals("COUNT", totalDocs, ((Number) row[response.getColumns().indexOf("c")]).longValue());
+        assertEquals("AVG", (double) VALUE, ((Number) row[response.getColumns().indexOf("a")]).doubleValue(), 0.001);
+    }
+
     private PPLResponse executePPL(String ppl) {
         return client().execute(UnifiedPPLExecuteAction.INSTANCE, new PPLRequest(ppl)).actionGet();
     }

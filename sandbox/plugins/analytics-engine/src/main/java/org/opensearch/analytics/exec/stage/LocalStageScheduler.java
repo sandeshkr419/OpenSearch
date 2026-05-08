@@ -8,16 +8,10 @@
 
 package org.opensearch.analytics.exec.stage;
 
-import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
-import org.apache.calcite.rel.RelNode;
-import org.apache.calcite.rel.core.Aggregate;
-import org.apache.calcite.rel.core.AggregateCall;
-import org.apache.calcite.rel.type.RelDataTypeField;
 import org.opensearch.analytics.exec.QueryContext;
 import org.opensearch.analytics.planner.dag.Stage;
 import org.opensearch.analytics.planner.dag.StageExecutionType;
-import org.opensearch.analytics.spi.AggregateFunction;
 import org.opensearch.analytics.spi.BackendExecutionContext;
 import org.opensearch.analytics.spi.ExchangeSink;
 import org.opensearch.analytics.spi.ExchangeSinkContext;
@@ -30,18 +24,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Builds executions for {@link StageExecutionType#COORDINATOR_REDUCE} stages —
- * those that run at the coordinator with a backend-provided {@link ExchangeSink}.
- * Creates the sink via {@link Stage#getExchangeSinkProvider()} using an
- * {@link ExchangeSinkContext} carrying the plan bytes, allocator, per-child
- * input descriptors (one per child stage, each with its stage id + Arrow
- * schema), and the downstream sink. Hands the resulting sink to
- * {@link LocalStageExecution}.
- *
- * <p>Multi-child stages (Union, future Join) are routed via
- * {@link LocalStageExecution#inputSink(int)}, which returns a per-child
- * wrapper that the backend sink uses to register a distinct input partition
- * per child stage id.
+ * Builds executions for {@link StageExecutionType#COORDINATOR_REDUCE} stages.
+ * The streaming table schema is derived directly from the child fragment's row type,
+ * which is correct because {@link org.opensearch.analytics.planner.rules.OpenSearchAggregateSplitRule}
+ * decomposes aggregates into their partial/final equivalents at planning time.
  *
  * @opensearch.internal
  */
@@ -61,12 +47,6 @@ final class LocalStageScheduler implements StageScheduler {
             sink
         );
 
-        // Apply instruction handlers for the reduce stage.
-        // Unlike AnalyticsSearchService (shard path) which resolves the factory from its
-        // local backends map, the coordinator-reduce path has no backends map — the factory
-        // is stored on the Stage during FragmentConversionDriver.convertAll (root stage only,
-        // no serialization needed since reduce executes locally at the coordinator).
-        // TODO: find a cleaner way to provide the factory without storing it on Stage.
         FragmentInstructionHandlerFactory factory = stage.getInstructionHandlerFactory();
         BackendExecutionContext backendContext = null;
         if (factory != null) {
@@ -85,7 +65,6 @@ final class LocalStageScheduler implements StageScheduler {
         return new LocalStageExecution(stage, backendSink, sink);
     }
 
-    /** Picks the plan-alternative bytes bound to the stage's exchange sink provider. */
     private static byte[] chosenBytes(Stage stage) {
         assert stage.getPlanAlternatives().size() == 1 : "COORDINATOR_REDUCE stage "
             + stage.getStageId()
@@ -94,12 +73,6 @@ final class LocalStageScheduler implements StageScheduler {
         return stage.getPlanAlternatives().getFirst().convertedBytes();
     }
 
-    /**
-     * Builds one {@link ExchangeSinkContext.ChildInput} per child stage. Each entry
-     * carries the child's stage id (used by the backend to namespace its registered
-     * input, e.g. {@code "input-<stageId>"}) and the Arrow schema derived from the
-     * child fragment's row type.
-     */
     private List<ExchangeSinkContext.ChildInput> buildChildInputs(Stage stage) {
         List<Stage> children = stage.getChildStages();
         if (children.isEmpty()) {
@@ -115,56 +88,9 @@ final class LocalStageScheduler implements StageScheduler {
     }
 
     private Schema deriveChildSchema(Stage child) {
-        RelNode childFragment = child.getPlanAlternatives().isEmpty()
+        var childFragment = child.getPlanAlternatives().isEmpty()
             ? child.getFragment()
             : child.getPlanAlternatives().getFirst().resolvedFragment();
-
-        Aggregate agg = findAggregate(childFragment);
-        if (agg == null) {
-            return ArrowSchemaFromCalcite.arrowSchemaFromRowType(childFragment.getRowType());
-        }
-
-        // Only use intermediate field expansion if any agg call actually has intermediate fields.
-        boolean hasIntermediateExpansion = agg.getAggCallList()
-            .stream()
-            .map(AggregateFunction::fromAggregateCall)
-            .anyMatch(f -> f != null && f.getIntermediateFields() != null);
-        if (!hasIntermediateExpansion) {
-            return ArrowSchemaFromCalcite.arrowSchemaFromRowType(childFragment.getRowType());
-        }
-
-        String backendId = child.getPlanAlternatives().isEmpty() ? null : child.getPlanAlternatives().getFirst().backendId();
-
-        List<Field> fields = new ArrayList<>();
-        int groupCount = agg.getGroupSet().cardinality();
-        for (int i = 0; i < groupCount; i++) {
-            RelDataTypeField f = childFragment.getRowType().getFieldList().get(i);
-            fields.add(ArrowSchemaFromCalcite.fieldFromCalcite(f));
-        }
-        for (int i = 0; i < agg.getAggCallList().size(); i++) {
-            AggregateCall call = agg.getAggCallList().get(i);
-            RelDataTypeField f = childFragment.getRowType().getFieldList().get(groupCount + i);
-            List<Field> intermediateFields = resolveIntermediateFields(call, backendId);
-            if (intermediateFields != null) {
-                for (Field iField : intermediateFields) {
-                    String fieldName = iField.getName().isEmpty() ? f.getName() : f.getName() + iField.getName();
-                    fields.add(new Field(fieldName, iField.getFieldType(), null));
-                }
-            } else {
-                fields.add(ArrowSchemaFromCalcite.fieldFromCalcite(f));
-            }
-        }
-        return new Schema(fields);
-    }
-
-    private List<Field> resolveIntermediateFields(AggregateCall call, String backendId) {
-        AggregateFunction func = AggregateFunction.fromAggregateCall(call);
-        return func != null ? func.getIntermediateFields() : null;
-    }
-
-    private static Aggregate findAggregate(RelNode node) {
-        if (node instanceof Aggregate agg) return agg;
-        if (node.getInputs().size() == 1) return findAggregate(node.getInputs().get(0));
-        return null;
+        return ArrowSchemaFromCalcite.arrowSchemaFromRowType(childFragment.getRowType());
     }
 }

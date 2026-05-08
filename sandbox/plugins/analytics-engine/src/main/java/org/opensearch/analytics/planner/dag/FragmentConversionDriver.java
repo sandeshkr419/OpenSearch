@@ -281,7 +281,7 @@ public class FragmentConversionDriver {
         if (node instanceof OpenSearchExchangeReducer) {
             // Strip ExchangeReducer — StageInputScan below it is the schema source
             // This should never be reached directly; handled by the parent (final agg)
-            return convertor.convertFinalAggFragment(fixIntermediateInputTypes(strip(node.getInputs().getFirst(), delegationBytes)));
+            return convertor.convertFinalAggFragment(strip(node.getInputs().getFirst(), delegationBytes));
         }
         if (node instanceof OpenSearchRelNode openSearchNode) {
             List<RelNode> strippedInputs = node.getInputs().stream().map(input -> strip(input, delegationBytes)).toList();
@@ -305,7 +305,7 @@ public class FragmentConversionDriver {
                         finalAggInputs.add(strip(input.getInputs().getFirst(), delegationBytes));
                     }
                     RelNode finalAggFragment = openSearchNode.stripAnnotations(finalAggInputs, resolver);
-                    return convertor.convertFinalAggFragment(fixIntermediateInputTypes(finalAggFragment));
+                    return convertor.convertFinalAggFragment(finalAggFragment);
                 }
             }
 
@@ -383,7 +383,9 @@ public class FragmentConversionDriver {
             } else {
                 needsRewrite = true;
                 scanNames.add(f.getName());
-                scanTypes.add(f.getType());
+                // SUM of a NOT NULL column infers nullable (empty group → NULL), so we must
+                // store the type as nullable to satisfy Calcite's typeMatchesInferred check.
+                scanTypes.add(typeFactory.createTypeWithNullability(f.getType(), true));
                 finalExprs.add((rb, refs) -> refs.get(0));
             }
         }
@@ -402,20 +404,18 @@ public class FragmentConversionDriver {
                 if (finalExpr != null) {
                     // SUM each intermediate field; finalExpr combines them in the Project
                     for (int j = 0; j < iFields.size(); j++) {
-                        var sumType = typeFactory.createTypeWithNullability(scanTypes.get(start + j), true);
+                        int colIdx = start + j;
+                        var inputType = scanTypes.get(colIdx);
                         newAggCalls.add(
                             AggregateCall.create(
                                 SqlStdOperatorTable.SUM,
                                 false,
-                                false,
-                                false,
-                                List.of(),
-                                List.of(start + j),
+                                List.of(colIdx),
                                 -1,
-                                null,
-                                RelCollations.EMPTY,
-                                sumType,
-                                scanNames.get(start + j)
+                                groupCount,
+                                newScan,
+                                sumReturnType(inputType, typeFactory),
+                                scanNames.get(colIdx)
                             )
                         );
                     }
@@ -424,19 +424,16 @@ public class FragmentConversionDriver {
                     newAggCalls.add(call.adaptTo(newScan, List.of(start), call.filterArg, groupCount, agg.getGroupCount()));
                 }
             } else {
-                var sumType = typeFactory.createTypeWithNullability(scanTypes.get(start), true);
+                var inputType = scanTypes.get(start);
                 newAggCalls.add(
                     AggregateCall.create(
                         SqlStdOperatorTable.SUM,
                         false,
-                        false,
-                        false,
-                        List.of(),
                         List.of(start),
                         -1,
-                        null,
-                        RelCollations.EMPTY,
-                        sumType,
+                        groupCount,
+                        newScan,
+                        sumReturnType(inputType, typeFactory),
                         scanNames.get(start)
                     )
                 );
@@ -505,6 +502,32 @@ public class FragmentConversionDriver {
         if (node instanceof org.apache.calcite.rel.core.Aggregate) return true;
         if (node.getInputs().size() == 1) return hasAggregate(node.getInputs().get(0));
         return false;
+    }
+
+    /**
+     * Mirrors Calcite's SUM return-type inference: integer inputs → BIGINT, floating → DOUBLE,
+     * preserving the input's nullability. This avoids the BIGINT vs BIGINT NOT NULL mismatch
+     * that occurs when passing an explicit type that doesn't match Calcite's inference.
+     */
+    private static org.apache.calcite.rel.type.RelDataType sumReturnType(
+        org.apache.calcite.rel.type.RelDataType inputType,
+        RelDataTypeFactory typeFactory
+    ) {
+        org.apache.calcite.rel.type.RelDataType base;
+        switch (inputType.getSqlTypeName()) {
+            case TINYINT:
+            case SMALLINT:
+            case INTEGER:
+            case BIGINT:
+                base = typeFactory.createSqlType(SqlTypeName.BIGINT);
+                break;
+            case FLOAT:
+                base = typeFactory.createSqlType(SqlTypeName.FLOAT);
+                break;
+            default:
+                base = typeFactory.createSqlType(SqlTypeName.DOUBLE);
+        }
+        return typeFactory.createTypeWithNullability(base, inputType.isNullable());
     }
 
     private static RelNode findLeaf(RelNode node) {
