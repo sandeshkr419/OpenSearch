@@ -263,21 +263,20 @@ public class FragmentConversionDriverTests extends BasePlannerRulesTests {
 
     /**
      * Coord-side fragment: Aggregate ← Join ← (ER ← ...) | (ER ← ...).
-     * The Join's two inputs are themselves gathered subtrees — convertReduceNode
-     * must dispatch to attachJoinFragment, not attachFragmentOnTop. Failing today
-     * because the driver tries to single-input replace a Join wrapper.
+     * Both branches are gathered subtrees. convertReduceNode must convert the whole Join +
+     * branches + ERs + StageInputScans subtree in a single {@code convertFinalAggFragment}
+     * pass — same path as Union / Intersect / Minus. No substrait-level join stitching.
      */
     public void testJoinDirectlyOverTwoExchanges() {
         RecordingConvertor convertor = new RecordingConvertor();
         QueryDAG dag = buildAndConvert(2, buildJoinOverTwoScans("test_index", "test_index"), convertor);
 
         // Find the coord-side join stage — the stage whose fragment contains the Join with
-        // two exchange-gathered branches. convertReduceNode must dispatch to attachJoinFragment
-        // when it hits that Join, not attachFragmentOnTop (which can't rewire multi-input rels).
+        // two exchange-gathered branches. The whole subtree converts in one pass.
         Stage joinStage = findStageWithTwoChildren(dag.rootStage());
         assertNotNull("expected a stage with 2 child stages (the coord-side Join stage)", joinStage);
         assertNotNull("join stage alternative must have convertedBytes", joinStage.getPlanAlternatives().getFirst().convertedBytes());
-        assertTrue("attachJoinFragment must be called for the Join node", convertor.joinAttachCalled);
+        assertTrue("convertFinalAggFragment must be called for the Join subtree", convertor.finalAggCalled);
     }
 
     private static Stage findStageWithTwoChildren(Stage stage) {
@@ -291,10 +290,8 @@ public class FragmentConversionDriverTests extends BasePlannerRulesTests {
 
     /**
      * Coord-side Union with pass-through operators (Sort/Project) between each arm and its
-     * ER. Isthmus's SubstraitRelVisitor handles Union natively; Union is NOT a Join and has
-     * no two-input rewire (replaceJoinInputs rejects Substrait Set rels). convertReduceNode
-     * must convert the whole Union subtree as one convertFinalAggFragment call — NOT dispatch
-     * to attachJoinFragment.
+     * ER. Isthmus's SubstraitRelVisitor handles Union natively; convertReduceNode converts
+     * the whole Union subtree as one convertFinalAggFragment call — same path as Join.
      */
     public void testUnionOverPassthroughThenExchange() {
         RecordingConvertor convertor = new RecordingConvertor();
@@ -321,7 +318,6 @@ public class FragmentConversionDriverTests extends BasePlannerRulesTests {
 
         Stage root = dag.rootStage();
         assertNotNull("root alternative must have convertedBytes", root.getPlanAlternatives().getFirst().convertedBytes());
-        assertFalse("attachJoinFragment must NOT be called for a Union node", convertor.joinAttachCalled);
         assertTrue("convertFinalAggFragment must be called for the Union subtree", convertor.finalAggCalled);
     }
 
@@ -747,7 +743,6 @@ public class FragmentConversionDriverTests extends BasePlannerRulesTests {
     private static class RecordingConvertor implements FragmentConvertor {
         boolean shardScanCalled;
         boolean finalAggCalled;
-        boolean joinAttachCalled;
         String shardScanTableName;
         RelNode shardScanFragment;
         RelNode reduceFragment;
@@ -775,15 +770,6 @@ public class FragmentConversionDriverTests extends BasePlannerRulesTests {
         @Override
         public byte[] attachPartialAggOnTop(RelNode partialAggFragment, byte[] innerBytes) {
             return ("partialAgg:" + new String(innerBytes, StandardCharsets.UTF_8)).getBytes(StandardCharsets.UTF_8);
-        }
-
-        @Override
-        public byte[] attachJoinFragment(RelNode joinFragment, byte[] leftInnerBytes, byte[] rightInnerBytes) {
-            this.joinAttachCalled = true;
-            return ("join:L="
-                + new String(leftInnerBytes, StandardCharsets.UTF_8)
-                + ",R="
-                + new String(rightInnerBytes, StandardCharsets.UTF_8)).getBytes(StandardCharsets.UTF_8);
         }
     }
 }

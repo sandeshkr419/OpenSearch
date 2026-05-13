@@ -21,7 +21,6 @@ import org.opensearch.analytics.planner.rel.AggregateMode;
 import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
 import org.opensearch.analytics.planner.rel.OpenSearchExchangeReducer;
 import org.opensearch.analytics.planner.rel.OpenSearchFilter;
-import org.opensearch.analytics.planner.rel.OpenSearchJoin;
 import org.opensearch.analytics.planner.rel.OpenSearchRelNode;
 import org.opensearch.analytics.planner.rel.OpenSearchStageInputScan;
 import org.opensearch.analytics.planner.rel.OpenSearchTableScan;
@@ -246,10 +245,11 @@ public class FragmentConversionDriver {
      * a partial agg) reach convertFinalAggFragment as soon as we see a node whose inputs
      * are all ExchangeReducers, and attach via attachFragmentOnTop on the way back up.
      *
-     * <p>Multi-input nodes (Join, Cross) are handled separately: each branch converts
-     * independently and the node itself wires them via attachJoinFragment. This handles
-     * both the "Join directly over two ERs" shape and the "Join over pass-through
-     * operators (Project, Sort) over ER" shape that coord-side hash join produces today.
+     * <p>Multi-input nodes (Join, Union, Intersect, Minus) are converted as a single
+     * subtree via convertFinalAggFragment: isthmus handles all of them natively, and
+     * rewriting OpenSearchStageInputScan leaves to plain TableScans (inside the convertor)
+     * lets the whole gathered subtree serialize in one pass. No post-conversion
+     * substrait-level stitching is needed.
      */
     private static byte[] convertReduceFragment(RelNode node, FragmentConvertor convertor, IntraOperatorDelegationBytes delegationBytes) {
         return convertReduceNode(node, convertor, false, delegationBytes);
@@ -291,19 +291,11 @@ public class FragmentConversionDriver {
                 }
             }
 
-            // Multi-input Join (or Cross): convert each branch independently and attach via the
-            // Substrait-level join rewire path. Each branch may itself be a gathered subtree
-            // (ER → StageInputScan) or carry pass-through operators above an ER.
-            if (node instanceof OpenSearchJoin && node.getInputs().size() >= 2) {
-                byte[] leftBytes = convertReduceNode(node.getInputs().get(0), convertor, false, delegationBytes);
-                byte[] rightBytes = convertReduceNode(node.getInputs().get(1), convertor, false, delegationBytes);
-                return convertor.attachJoinFragment(strippedNode, leftBytes, rightBytes);
-            }
-
-            // Multi-input non-Join (Union / Intersect / Minus): the Substrait Set rel is N-ary
-            // and has no two-input rewire path. Isthmus handles Union/Intersect/Minus natively,
-            // so convert the whole subtree in one shot via convertFinalAggFragment. ERs beneath
-            // each arm get stripped by strip(), leaving StageInputScan leaves for schema inference.
+            // Multi-input node (Join, Union, Intersect, Minus): isthmus handles all of them
+            // natively. The whole subtree — multi-input node + its branches + ERs +
+            // StageInputScans — serializes in one convertFinalAggFragment pass. The convertor's
+            // StageInputScan → plain TableScan rewrite makes the leaves isthmus-friendly without
+            // any post-conversion substrait-level stitching.
             if (node.getInputs().size() >= 2) {
                 return convertor.convertFinalAggFragment(strip(node, delegationBytes));
             }
