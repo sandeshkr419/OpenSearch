@@ -32,12 +32,13 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
-use datafusion::common::tree_node::TreeNode;
+use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{DFSchema, ScalarValue};
 use datafusion::execution::context::ExecutionProps;
+use datafusion::logical_expr::expr::{Between, InList, Like};
 use datafusion::logical_expr::{
-    ColumnarValue, Expr, LogicalPlan, Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-    Signature, TypeSignature, Volatility,
+    BinaryExpr, ColumnarValue, Expr, ExprSchemable, LogicalPlan, Operator, ScalarFunctionArgs,
+    ScalarUDF, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion::physical_expr::create_physical_expr;
 #[cfg(test)]
@@ -97,7 +98,22 @@ pub fn expr_to_bool_tree(expr: &Expr, schema: &SchemaRef) -> Result<ExtractionRe
     let df_schema =
         DFSchema::try_from(schema.as_ref().clone()).map_err(|e| format!("DFSchema: {}", e))?;
     let props = ExecutionProps::new();
-    let tree = convert_expr(expr, schema, &df_schema, &props)?;
+    // Strip table qualifiers up front. Substrait's NamedScan-derived field
+    // references qualify columns with the table name (e.g.
+    // "test_table.elb_status_code"), but the parquet schema (and thus the
+    // DFSchema we look types up in) carries bare names. Stripping here is
+    // necessary so the literal-promotion pre-pass below can resolve column
+    // types via the schema.
+    let unqualified = strip_column_qualifiers(expr);
+    // Promote substrait `Utf8` / `LargeUtf8` literals to `Utf8View` when
+    // they participate in a comparison/LIKE/IN/BETWEEN against a
+    // `Utf8View` column. See `promote_string_literals_for_view_columns`
+    // for the full rationale; in short: substrait has no Utf8View
+    // literal type, but the parquet leaf in this session emits Utf8View
+    // for string columns when `schema_force_view_types` is on, and
+    // arrow's comparison/LIKE kernels reject mixed string variants.
+    let promoted = promote_string_literals_for_view_columns(unqualified, &df_schema)?;
+    let tree = convert_expr(&promoted, schema, &df_schema, &props)?;
     Ok(ExtractionResult { tree })
 }
 
@@ -184,6 +200,134 @@ fn strip_column_qualifiers(expr: &Expr) -> Expr {
         .data
 }
 
+/// Promote substrait `Utf8` / `LargeUtf8` string literals to `Utf8View`
+/// when they participate in a comparison / LIKE / IN / BETWEEN against an
+/// expression whose type is `Utf8View`.
+///
+/// **Why this exists.** Substrait literals always decode to `Utf8`
+/// (substrait has no `Utf8View` variant). The parquet leaf in this session
+/// emits `Utf8View` for string columns when `schema_force_view_types` is
+/// on. Without promotion, the resulting `BinaryExpr` / `LikeExpr` would
+/// have mismatched string operands and arrow rejects mixed-variant
+/// comparisons at runtime with errors like:
+///
+/// - `Invalid comparison operation: Utf8View == Utf8` (equality on keyword
+///   fields),
+/// - `Utf8View AND Utf8 of like physical should be same` (LIKE on text
+///   fields).
+///
+/// **Why not run DataFusion's `TypeCoercionRewriter` here.** That rewriter
+/// would insert a `Cast(literal AS Utf8View)` node, and it would survive
+/// into the physical expression because this path bypasses the optimizer
+/// (predicate const-folding never runs). Retagging the literal directly
+/// produces the same end state — `Utf8View` literal compared to `Utf8View`
+/// column — with no per-batch `Cast` evaluation in the bool tree's
+/// `BoolNode::Predicate` leaves or the parquet pushdown predicate handed
+/// to `ParquetSource::with_predicate`.
+///
+/// **Scope.** Comparison `BinaryExpr`s (the `=`, `<>`, `<`, `<=`, `>`,
+/// `>=` family), `Like`, `Between`, and `InList`. AND/OR/NOT and other
+/// non-string operators pass through unchanged.
+fn promote_string_literals_for_view_columns(
+    expr: Expr,
+    df_schema: &DFSchema,
+) -> Result<Expr, String> {
+    let result = expr
+        .transform(|e| {
+            let new_e = match e {
+                Expr::BinaryExpr(BinaryExpr { left, op, right })
+                    if is_string_comparison_operator(&op) =>
+                {
+                    let left_ty = left.get_type(df_schema).ok();
+                    let right_ty = right.get_type(df_schema).ok();
+                    let new_left = retag_if_peer_is_view(*left, &right_ty);
+                    let new_right = retag_if_peer_is_view(*right, &left_ty);
+                    Expr::BinaryExpr(BinaryExpr::new(Box::new(new_left), op, Box::new(new_right)))
+                }
+                Expr::Like(like) => {
+                    let expr_ty = like.expr.get_type(df_schema).ok();
+                    let pat_ty = like.pattern.get_type(df_schema).ok();
+                    let new_expr = retag_if_peer_is_view(*like.expr, &pat_ty);
+                    let new_pattern = retag_if_peer_is_view(*like.pattern, &expr_ty);
+                    Expr::Like(Like {
+                        negated: like.negated,
+                        expr: Box::new(new_expr),
+                        pattern: Box::new(new_pattern),
+                        escape_char: like.escape_char,
+                        case_insensitive: like.case_insensitive,
+                    })
+                }
+                Expr::Between(between) => {
+                    let expr_ty = between.expr.get_type(df_schema).ok();
+                    let new_low = retag_if_peer_is_view(*between.low, &expr_ty);
+                    let new_high = retag_if_peer_is_view(*between.high, &expr_ty);
+                    Expr::Between(Between {
+                        expr: between.expr,
+                        negated: between.negated,
+                        low: Box::new(new_low),
+                        high: Box::new(new_high),
+                    })
+                }
+                Expr::InList(in_list) => {
+                    let expr_ty = in_list.expr.get_type(df_schema).ok();
+                    let new_list: Vec<Expr> = in_list
+                        .list
+                        .into_iter()
+                        .map(|e| retag_if_peer_is_view(e, &expr_ty))
+                        .collect();
+                    Expr::InList(InList {
+                        expr: in_list.expr,
+                        list: new_list,
+                        negated: in_list.negated,
+                    })
+                }
+                other => return Ok(Transformed::no(other)),
+            };
+            Ok(Transformed::yes(new_e))
+        })
+        .map_err(|e| format!("promote_string_literals: {}", e))?;
+    Ok(result.data)
+}
+
+/// If `peer_type` is `Utf8View` and `expr` is a `Utf8` / `LargeUtf8`
+/// literal (including `NULL` of those types), retag the literal to
+/// `Utf8View`. Otherwise return `expr` unchanged.
+fn retag_if_peer_is_view(expr: Expr, peer_type: &Option<DataType>) -> Expr {
+    if !matches!(peer_type, Some(DataType::Utf8View)) {
+        return expr;
+    }
+    match expr {
+        Expr::Literal(ScalarValue::Utf8(s), m) => Expr::Literal(ScalarValue::Utf8View(s), m),
+        Expr::Literal(ScalarValue::LargeUtf8(s), m) => Expr::Literal(ScalarValue::Utf8View(s), m),
+        other => other,
+    }
+}
+
+/// True for the comparison / inequality operators where mixed string
+/// variants between operands cause runtime kernel errors. AND / OR /
+/// arithmetic / string-concat / bitwise are excluded.
+fn is_string_comparison_operator(op: &Operator) -> bool {
+    matches!(
+        op,
+        Operator::Eq
+            | Operator::NotEq
+            | Operator::Lt
+            | Operator::LtEq
+            | Operator::Gt
+            | Operator::GtEq
+            | Operator::IsDistinctFrom
+            | Operator::IsNotDistinctFrom
+            | Operator::LikeMatch
+            | Operator::NotLikeMatch
+            | Operator::ILikeMatch
+            | Operator::NotILikeMatch
+            | Operator::RegexMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotIMatch
+    )
+}
+
 fn extract_int32_literal(expr: &Expr) -> Result<i32, String> {
     match expr {
         Expr::Literal(ScalarValue::Int32(Some(v)), _) => Ok(*v),
@@ -252,9 +396,7 @@ impl IndexFilterUdf {
     fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![DataType::Int32]),
-                ],
+                vec![TypeSignature::Exact(vec![DataType::Int32])],
                 Volatility::Immutable,
             ),
         }
@@ -441,12 +583,343 @@ mod tests {
         assert!(matches!(r.tree, BoolNode::And(_)));
     }
 
+    // ── promote_string_literals_for_view_columns ─────────────────────
+    //
+    // Substrait literals always decode to `Utf8`; this session's parquet
+    // leaf emits `Utf8View` for string columns. The promote pass is what
+    // bridges that gap before `create_physical_expr`. These tests exercise
+    // the pass directly and end-to-end through `expr_to_bool_tree`.
+
+    fn view_string_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8View, true),
+            Field::new("city", DataType::Utf8View, true),
+            Field::new("legacy_name", DataType::Utf8, true),
+            Field::new("price", DataType::Int32, false),
+        ]))
+    }
+
+    fn df_schema_for(s: &SchemaRef) -> DFSchema {
+        DFSchema::try_from(s.as_ref().clone()).unwrap()
+    }
+
+    fn assert_is_utf8view_literal(expr: &Expr, expected: &str) {
+        match expr {
+            Expr::Literal(ScalarValue::Utf8View(Some(s)), _) => assert_eq!(s, expected),
+            other => panic!("expected Utf8View literal {:?}, got {:?}", expected, other),
+        }
+    }
+
+    fn assert_is_utf8_literal(expr: &Expr, expected: &str) {
+        match expr {
+            Expr::Literal(ScalarValue::Utf8(Some(s)), _) => assert_eq!(s, expected),
+            other => panic!("expected Utf8 literal {:?}, got {:?}", expected, other),
+        }
+    }
+
+    #[test]
+    fn promote_eq_view_column_against_utf8_literal() {
+        // name[Utf8View] = 'B8'(Utf8) → both Utf8View
+        let expr = col("name").eq(lit("B8"));
+        let schema = view_string_schema();
+        let dfs = df_schema_for(&schema);
+        let promoted = promote_string_literals_for_view_columns(expr, &dfs).unwrap();
+        match &promoted {
+            Expr::BinaryExpr(BinaryExpr { right, .. }) => {
+                assert_is_utf8view_literal(right, "B8");
+            }
+            other => panic!("expected BinaryExpr, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_eq_handles_swapped_operands() {
+        // 'B8'(Utf8) = name[Utf8View] → literal still promoted (mirror direction).
+        let expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(lit("B8")),
+            Operator::Eq,
+            Box::new(col("name")),
+        ));
+        let schema = view_string_schema();
+        let dfs = df_schema_for(&schema);
+        let promoted = promote_string_literals_for_view_columns(expr, &dfs).unwrap();
+        match &promoted {
+            Expr::BinaryExpr(BinaryExpr { left, .. }) => {
+                assert_is_utf8view_literal(left, "B8");
+            }
+            other => panic!("expected BinaryExpr, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_large_utf8_literal_against_view_column() {
+        let expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col("name")),
+            Operator::Eq,
+            Box::new(Expr::Literal(
+                ScalarValue::LargeUtf8(Some("B8".to_string())),
+                None,
+            )),
+        ));
+        let dfs = df_schema_for(&view_string_schema());
+        let promoted = promote_string_literals_for_view_columns(expr, &dfs).unwrap();
+        match &promoted {
+            Expr::BinaryExpr(BinaryExpr { right, .. }) => {
+                assert_is_utf8view_literal(right, "B8");
+            }
+            other => panic!("expected BinaryExpr, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_preserves_null_literal_type_widening() {
+        // name[Utf8View] = NULL(Utf8) → NULL(Utf8View). Null literals must
+        // also widen so the kernel sees matching variants.
+        let expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col("name")),
+            Operator::Eq,
+            Box::new(Expr::Literal(ScalarValue::Utf8(None), None)),
+        ));
+        let dfs = df_schema_for(&view_string_schema());
+        let promoted = promote_string_literals_for_view_columns(expr, &dfs).unwrap();
+        match &promoted {
+            Expr::BinaryExpr(BinaryExpr { right, .. }) => match right.as_ref() {
+                Expr::Literal(ScalarValue::Utf8View(None), _) => {}
+                other => panic!("expected Utf8View(None), got {:?}", other),
+            },
+            other => panic!("expected BinaryExpr, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_skips_non_view_string_column() {
+        // legacy_name[Utf8] = 'B8'(Utf8) → unchanged; both already Utf8.
+        let expr = col("legacy_name").eq(lit("B8"));
+        let dfs = df_schema_for(&view_string_schema());
+        let promoted = promote_string_literals_for_view_columns(expr, &dfs).unwrap();
+        match &promoted {
+            Expr::BinaryExpr(BinaryExpr { right, .. }) => {
+                assert_is_utf8_literal(right, "B8");
+            }
+            other => panic!("expected BinaryExpr, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_skips_non_string_literal() {
+        // price[Int32] = 100(Int32) → unchanged; literal is not a string.
+        let expr = col("price").eq(lit(100i32));
+        let dfs = df_schema_for(&view_string_schema());
+        let promoted = promote_string_literals_for_view_columns(expr.clone(), &dfs).unwrap();
+        match &promoted {
+            Expr::BinaryExpr(BinaryExpr { right, .. }) => match right.as_ref() {
+                Expr::Literal(ScalarValue::Int32(Some(100)), _) => {}
+                other => panic!("expected Int32 literal, got {:?}", other),
+            },
+            other => panic!("expected BinaryExpr, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_covers_all_comparison_operators() {
+        // Each of =, !=, <, <=, >, >= should retag the literal sibling.
+        for op in [
+            Operator::Eq,
+            Operator::NotEq,
+            Operator::Lt,
+            Operator::LtEq,
+            Operator::Gt,
+            Operator::GtEq,
+        ] {
+            let expr = Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(col("name")),
+                op,
+                Box::new(lit("B8")),
+            ));
+            let dfs = df_schema_for(&view_string_schema());
+            let promoted = promote_string_literals_for_view_columns(expr, &dfs).unwrap();
+            match &promoted {
+                Expr::BinaryExpr(BinaryExpr { right, .. }) => {
+                    assert_is_utf8view_literal(right, "B8");
+                }
+                other => panic!("op {:?}: expected BinaryExpr, got {:?}", op, other),
+            }
+        }
+    }
+
+    #[test]
+    fn promote_skips_non_comparison_binary_operator() {
+        // String concat is not a comparison; type coercion is the kernel's
+        // problem. Leave the literal alone.
+        let expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(col("name")),
+            Operator::StringConcat,
+            Box::new(lit("_suffix")),
+        ));
+        let dfs = df_schema_for(&view_string_schema());
+        let promoted = promote_string_literals_for_view_columns(expr, &dfs).unwrap();
+        match &promoted {
+            Expr::BinaryExpr(BinaryExpr { right, .. }) => {
+                assert_is_utf8_literal(right, "_suffix");
+            }
+            other => panic!("expected BinaryExpr, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_like_pattern_against_view_column() {
+        // name[Utf8View] LIKE 'goog%'(Utf8) → pattern promoted to Utf8View.
+        let expr = Expr::Like(Like {
+            negated: false,
+            expr: Box::new(col("name")),
+            pattern: Box::new(lit("goog%")),
+            escape_char: None,
+            case_insensitive: false,
+        });
+        let dfs = df_schema_for(&view_string_schema());
+        let promoted = promote_string_literals_for_view_columns(expr, &dfs).unwrap();
+        match &promoted {
+            Expr::Like(Like { pattern, .. }) => {
+                assert_is_utf8view_literal(pattern, "goog%");
+            }
+            other => panic!("expected Like, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_between_bounds_against_view_column() {
+        // name[Utf8View] BETWEEN 'a'(Utf8) AND 'z'(Utf8) → both promoted.
+        let expr = Expr::Between(Between {
+            expr: Box::new(col("name")),
+            negated: false,
+            low: Box::new(lit("a")),
+            high: Box::new(lit("z")),
+        });
+        let dfs = df_schema_for(&view_string_schema());
+        let promoted = promote_string_literals_for_view_columns(expr, &dfs).unwrap();
+        match &promoted {
+            Expr::Between(Between { low, high, .. }) => {
+                assert_is_utf8view_literal(low, "a");
+                assert_is_utf8view_literal(high, "z");
+            }
+            other => panic!("expected Between, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_in_list_against_view_column() {
+        // name[Utf8View] IN ('B8', 'US', 'IN')(Utf8) → all promoted.
+        let expr = Expr::InList(InList {
+            expr: Box::new(col("name")),
+            list: vec![lit("B8"), lit("US"), lit("IN")],
+            negated: false,
+        });
+        let dfs = df_schema_for(&view_string_schema());
+        let promoted = promote_string_literals_for_view_columns(expr, &dfs).unwrap();
+        match &promoted {
+            Expr::InList(InList { list, .. }) => {
+                assert_eq!(list.len(), 3);
+                assert_is_utf8view_literal(&list[0], "B8");
+                assert_is_utf8view_literal(&list[1], "US");
+                assert_is_utf8view_literal(&list[2], "IN");
+            }
+            other => panic!("expected InList, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn promote_recurses_through_and_or_not() {
+        // (name = 'B8') AND ((city = 'NYC') OR NOT(name = 'X'))
+        // — every comparison's literal is promoted independently.
+        let expr = col("name").eq(lit("B8")).and(
+            col("city")
+                .eq(lit("NYC"))
+                .or(Expr::Not(Box::new(col("name").eq(lit("X"))))),
+        );
+        let dfs = df_schema_for(&view_string_schema());
+        let promoted = promote_string_literals_for_view_columns(expr, &dfs).unwrap();
+
+        // Walk and collect every literal we see; assert all are Utf8View.
+        let mut literal_kinds: Vec<&'static str> = Vec::new();
+        promoted
+            .clone()
+            .apply(|e| {
+                if let Expr::Literal(sv, _) = e {
+                    literal_kinds.push(match sv {
+                        ScalarValue::Utf8View(_) => "Utf8View",
+                        ScalarValue::Utf8(_) => "Utf8",
+                        ScalarValue::LargeUtf8(_) => "LargeUtf8",
+                        _ => "other",
+                    });
+                }
+                Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+            })
+            .unwrap();
+        assert!(
+            literal_kinds.iter().all(|k| *k == "Utf8View"),
+            "expected every string literal to be Utf8View, got {:?}",
+            literal_kinds
+        );
+        assert_eq!(literal_kinds.len(), 3);
+    }
+
+    // ── End-to-end through expr_to_bool_tree ─────────────────────────
+    //
+    // Pre-fix: each of these reproduced the runtime errors quoted in the
+    // PR description. Post-fix, `create_physical_expr` succeeds because
+    // both operands are Utf8View by the time it runs.
+
+    #[test]
+    fn e2e_eq_view_column_with_utf8_literal_does_not_fail() {
+        let expr = col("name").eq(lit("B8"));
+        let r = expr_to_bool_tree(&expr, &view_string_schema()).unwrap();
+        assert!(matches!(r.tree, BoolNode::Predicate(_)));
+    }
+
+    #[test]
+    fn e2e_like_view_column_with_utf8_pattern_does_not_fail() {
+        let expr = Expr::Like(Like {
+            negated: false,
+            expr: Box::new(col("name")),
+            pattern: Box::new(lit("goog%")),
+            escape_char: None,
+            case_insensitive: false,
+        });
+        let r = expr_to_bool_tree(&expr, &view_string_schema()).unwrap();
+        assert!(matches!(r.tree, BoolNode::Predicate(_)));
+    }
+
+    #[test]
+    fn e2e_in_list_view_column_with_utf8_literals_does_not_fail() {
+        let expr = Expr::InList(InList {
+            expr: Box::new(col("name")),
+            list: vec![lit("B8"), lit("US")],
+            negated: false,
+        });
+        let r = expr_to_bool_tree(&expr, &view_string_schema()).unwrap();
+        assert!(matches!(r.tree, BoolNode::Predicate(_)));
+    }
+
+    #[test]
+    fn e2e_between_view_column_with_utf8_bounds_does_not_fail() {
+        let expr = Expr::Between(Between {
+            expr: Box::new(col("name")),
+            negated: false,
+            low: Box::new(lit("a")),
+            high: Box::new(lit("z")),
+        });
+        let r = expr_to_bool_tree(&expr, &view_string_schema()).unwrap();
+        // Between may desugar into And of comparisons or stay as-is.
+        match r.tree {
+            BoolNode::Predicate(_) | BoolNode::And(_) => {}
+            other => panic!("expected Predicate or And, got {:?}", other),
+        }
+    }
+
     // ── classify_filter ──────────────────────────────────────────────
 
     fn collector(id: i32) -> BoolNode {
-        BoolNode::Collector {
-            annotation_id: id,
-        }
+        BoolNode::Collector { annotation_id: id }
     }
     fn dummy_predicate() -> BoolNode {
         // A stand-in Predicate leaf — classify only cares about shape,
