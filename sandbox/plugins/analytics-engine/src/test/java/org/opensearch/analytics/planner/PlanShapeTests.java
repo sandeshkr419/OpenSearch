@@ -58,7 +58,7 @@ public class PlanShapeTests extends PlanShapeTestBase {
         assertPlanShape(
             """
                 OpenSearchProject(k=[$1], cnt=[$0], viableBackends=[[mock-parquet]])
-                  OpenSearchSort(sort0=[$0], dir0=[ASC], fetch=[2], viableBackends=[[mock-parquet]])
+                  OpenSearchSort(sort0=[$0], dir0=[ASC], fetch=[2], mode=[SINGLE], viableBackends=[[mock-parquet]])
                     OpenSearchProject(cnt=[$1], k=[$0], viableBackends=[[mock-parquet]])
                       OpenSearchAggregate(group=[{0}], cnt=[COUNT()], mode=[FINAL], viableBackends=[[mock-parquet]])
                         OpenSearchExchangeReducer(viableBackends=[[mock-parquet]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
@@ -79,7 +79,7 @@ public class PlanShapeTests extends PlanShapeTestBase {
         assertPlanShape(
             """
                 OpenSearchProject(k=[$1], cnt=[$0], viableBackends=[[mock-parquet]])
-                  OpenSearchSort(sort0=[$0], dir0=[ASC], fetch=[2], viableBackends=[[mock-parquet]])
+                  OpenSearchSort(sort0=[$0], dir0=[ASC], fetch=[2], mode=[SINGLE], viableBackends=[[mock-parquet]])
                     OpenSearchProject(cnt=[$1], k=[$0], viableBackends=[[mock-parquet]])
                       OpenSearchAggregate(group=[{0}], cnt=[COUNT()], mode=[FINAL], viableBackends=[[mock-parquet]])
                         OpenSearchExchangeReducer(viableBackends=[[mock-parquet]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
@@ -101,9 +101,9 @@ public class PlanShapeTests extends PlanShapeTestBase {
         RelNode result = runPlanner(input, multiShardContext());
         assertPlanShape(
             """
-                OpenSearchSort(sort0=[$0], dir0=[ASC], viableBackends=[[mock-parquet]])
+                OpenSearchSort(sort0=[$0], dir0=[ASC], mode=[SINGLE], viableBackends=[[mock-parquet]])
                   OpenSearchProject(k=[$1], cnt=[$0], viableBackends=[[mock-parquet]])
-                    OpenSearchSort(sort0=[$0], dir0=[ASC], fetch=[2], viableBackends=[[mock-parquet]])
+                    OpenSearchSort(sort0=[$0], dir0=[ASC], fetch=[2], mode=[SINGLE], viableBackends=[[mock-parquet]])
                       OpenSearchProject(cnt=[$1], k=[$0], viableBackends=[[mock-parquet]])
                         OpenSearchAggregate(group=[{0}], cnt=[COUNT()], mode=[FINAL], viableBackends=[[mock-parquet]])
                           OpenSearchExchangeReducer(viableBackends=[[mock-parquet]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
@@ -293,10 +293,10 @@ public class PlanShapeTests extends PlanShapeTestBase {
         RelNode result = runPlanner(limit, buildContext("parquet", 3, fields));
         assertPlanShape(
             """
-                OpenSearchSort(fetch=[3], viableBackends=[[mock-parquet]])
-                  OpenSearchProject(name=[$0], score=[$1], viableBackends=[[mock-parquet]])
-                    OpenSearchSort(sort0=[$1], dir0=[ASC], viableBackends=[[mock-parquet]])
-                      OpenSearchExchangeReducer(viableBackends=[[mock-parquet]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
+                OpenSearchProject(name=[$0], score=[$1], viableBackends=[[mock-parquet]])
+                  OpenSearchSort(sort0=[$1], dir0=[ASC], fetch=[3], mode=[FINAL], viableBackends=[[mock-parquet]])
+                    OpenSearchExchangeReducer(viableBackends=[[mock-parquet]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
+                      OpenSearchSort(sort0=[$1], dir0=[ASC], fetch=[3], mode=[PARTIAL], viableBackends=[[mock-parquet]])
                         OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
                 """,
             result
@@ -443,7 +443,7 @@ public class PlanShapeTests extends PlanShapeTestBase {
         RelNode result = runPlanner(plan, perIndexContext(Map.of("left_idx", 2, "right_idx", 2)));
         assertPlanShape(
             """
-                OpenSearchSort(sort0=[$0], dir0=[ASC], viableBackends=[[mock-parquet]])
+                OpenSearchSort(sort0=[$0], dir0=[ASC], mode=[SINGLE], viableBackends=[[mock-parquet]])
                   OpenSearchJoin(condition=[=($0, $2)], joinType=[inner], viableBackends=[[mock-parquet]])
                     OpenSearchExchangeReducer(viableBackends=[[mock-parquet]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
                       OpenSearchTableScan(table=[[left_idx]], viableBackends=[[mock-parquet]])
@@ -472,7 +472,7 @@ public class PlanShapeTests extends PlanShapeTestBase {
         RelNode result = runPlanner(plan, unionContextSingleIndex("test_index", 2));
         assertPlanShape(
             """
-                OpenSearchSort(sort0=[$0], dir0=[ASC], viableBackends=[[mock-parquet]])
+                OpenSearchSort(sort0=[$0], dir0=[ASC], mode=[SINGLE], viableBackends=[[mock-parquet]])
                   OpenSearchUnion(all=[true], viableBackends=[[mock-parquet]])
                     OpenSearchExchangeReducer(viableBackends=[[mock-parquet]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
                       OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])

@@ -13,26 +13,32 @@ import org.apache.calcite.plan.RelOptRuleCall;
 import org.apache.calcite.rel.RelFieldCollation;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Sort;
+import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexInputRef;
+import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexNode;
 import org.opensearch.analytics.planner.PlannerContext;
 import org.opensearch.analytics.planner.RelNodeUtils;
+import org.opensearch.analytics.planner.rel.ExecutionMode;
 import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
 import org.opensearch.analytics.planner.rel.OpenSearchProject;
 import org.opensearch.analytics.planner.rel.OpenSearchRelNode;
 import org.opensearch.analytics.planner.rel.OpenSearchSort;
+import org.opensearch.analytics.planner.rel.OpenSearchTableScan;
 import org.opensearch.analytics.spi.EngineCapability;
+import org.opensearch.cluster.metadata.IndexMetadata;
+import org.opensearch.index.IndexSettings;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 /**
  * Converts {@link Sort} → {@link OpenSearchSort}.
  *
- * <p>Validates that the chosen backend supports {@link EngineCapability#SORT}.
- *
- * <p>TODO: for multi-shard Sort+Limit, the split into partial sort
- * per shard + final merge sort at coordinator happens via CBO trait
- * propagation (same as aggregate split).
+ * <p>Validates the chosen backend supports {@link EngineCapability#SORT}, applies
+ * a few structural rewrites (drop redundant outer Sorts, push the system-LIMIT
+ * fetch into a collated inner Sort), and validates user-explicit limits against
+ * each table's {@code index.max_result_window}.
  *
  * @opensearch.internal
  */
@@ -82,6 +88,35 @@ public class OpenSearchSortRule extends RelOptRule {
             }
         }
 
+        // Push the outer pure-fetch's fetch down into a collated inner Sort. Pattern:
+        // Sort(no-coll, fetch=K) ← (projects) ← Sort(coll, no-fetch) ← child
+        // — typically the implicit system query-size LIMIT wrapped around `ORDER BY x`
+        // (no explicit user LIMIT). Pushing the fetch down lets OpenSearchSortSplitRule's
+        // PARTIAL+FINAL alternative fire with a bounded shard fetch. The system-injected
+        // fetch is silently clamped to the per-index max_result_window — user-explicit
+        // limits go through validateMaxResultWindow below and hard-error when too large.
+        if (sort.getCollation().getFieldCollations().isEmpty() && sort.offset == null && sort.fetch != null) {
+            OpenSearchSort innerCollated = findInnerCollatedSortWithoutFetchThroughProjects(child);
+            if (innerCollated != null) {
+                RexNode pushedFetch = clampSystemLimitToMaxResultWindow(sort.fetch, innerCollated);
+                OpenSearchSort innerWithFetch = (OpenSearchSort) innerCollated.copy(
+                    innerCollated.getTraitSet(),
+                    innerCollated.getInput(),
+                    innerCollated.getCollation(),
+                    null,
+                    pushedFetch
+                );
+                RelNode newChild = replaceSortInProjectChain(child, innerCollated, innerWithFetch);
+                call.transformTo(newChild);
+                return;
+            }
+        }
+
+        // Reject user-explicit limits exceeding per-index max_result_window.
+        if (!sort.getCollation().getFieldCollations().isEmpty() && sort.fetch != null) {
+            validateMaxResultWindow(sort, child);
+        }
+
         List<String> childViableBackends = openSearchChild.getViableBackends();
         List<String> sortCapable = context.getCapabilityRegistry().operatorBackends(EngineCapability.SORT);
 
@@ -91,8 +126,8 @@ public class OpenSearchSortRule extends RelOptRule {
             throw new IllegalStateException("No backend supports SORT capability among " + childViableBackends);
         }
 
-        // plus(): Calcite's Sort constructor asserts the trait set contains the collation.
-        // replace() is a no-op if the slot is missing; plus() appends or overrides.
+        // Calcite's Sort constructor asserts the trait set contains the collation;
+        // plus() appends or overrides while replace() is a no-op when the slot is missing.
         call.transformTo(
             new OpenSearchSort(
                 sort.getCluster(),
@@ -101,6 +136,7 @@ public class OpenSearchSortRule extends RelOptRule {
                 sort.getCollation(),
                 sort.offset,
                 sort.fetch,
+                ExecutionMode.SINGLE,
                 viableBackends
             )
         );
@@ -121,6 +157,125 @@ public class OpenSearchSortRule extends RelOptRule {
             current = RelNodeUtils.unwrapHep(project.getInput());
         }
         return current instanceof OpenSearchSort innerSort && innerSort.fetch != null ? innerSort : null;
+    }
+
+    /**
+     * Walks down through OpenSearchProjects, returns the first OpenSearchSort that has
+     * collation but no fetch and no offset — the canonical "user ORDER BY without LIMIT"
+     * shape. Used by the system-LIMIT push-down rewrite.
+     */
+    private static OpenSearchSort findInnerCollatedSortWithoutFetchThroughProjects(RelNode node) {
+        RelNode current = RelNodeUtils.unwrapHep(node);
+        while (current instanceof OpenSearchProject project) {
+            current = RelNodeUtils.unwrapHep(project.getInput());
+        }
+        if (current instanceof OpenSearchSort innerSort
+            && innerSort.fetch == null
+            && innerSort.offset == null
+            && innerSort.getCollation().getFieldCollations().isEmpty() == false) {
+            return innerSort;
+        }
+        return null;
+    }
+
+    /**
+     * Walks down through OpenSearchProjects, replacing {@code target} with {@code replacement}
+     * in the chain. Returns the new chain top. Throws if the walk encounters anything other
+     * than OpenSearchProjects on the way down.
+     */
+    private static RelNode replaceSortInProjectChain(RelNode chainTop, OpenSearchSort target, OpenSearchSort replacement) {
+        RelNode current = RelNodeUtils.unwrapHep(chainTop);
+        if (current == target) return replacement;
+        if (current instanceof OpenSearchProject project) {
+            RelNode rebuilt = replaceSortInProjectChain(project.getInput(), target, replacement);
+            return project.copy(project.getTraitSet(), List.of(rebuilt));
+        }
+        throw new IllegalStateException(
+            "replaceSortInProjectChain: unexpected node "
+                + current.getClass().getSimpleName()
+                + " (expected OpenSearchProject or target Sort)"
+        );
+    }
+
+    // ── max_result_window cap ──────────────────────────────────────────────────
+
+    /**
+     * Rejects user-explicit limits where {@code offset + fetch} exceeds the per-index
+     * {@code index.max_result_window}, matching native OpenSearch's "Result window is
+     * too large" behavior. Multi-table Sorts (Join, Union) take the {@code min} across
+     * involved indices.
+     */
+    private void validateMaxResultWindow(Sort sort, RelNode subtree) {
+        if (!(sort.fetch instanceof RexLiteral fetchLit)) return;
+        long offset = sort.offset instanceof RexLiteral offLit ? RexLiteral.intValue(offLit) : 0L;
+        long fetch = RexLiteral.intValue(fetchLit);
+        long bound;
+        try {
+            bound = Math.addExact(offset, fetch);
+        } catch (ArithmeticException overflow) {
+            throw new IllegalArgumentException(
+                "Result window is too large, [from + size] overflows int. Use a smaller LIMIT/OFFSET, or paginate."
+            );
+        }
+        int cap = resolveMinMaxResultWindow(subtree);
+        if (bound > cap) {
+            throw new IllegalArgumentException(
+                "Result window is too large, [from + size] = "
+                    + bound
+                    + " must be less than or equal to: ["
+                    + cap
+                    + "]. Use a smaller LIMIT, or override [index.max_result_window] per-index."
+            );
+        }
+    }
+
+    /**
+     * Clamps a system-injected fetch (frontend safety net) to the per-index cap.
+     * Returns the original RexNode unchanged when no clamp is needed.
+     */
+    private RexNode clampSystemLimitToMaxResultWindow(RexNode systemFetch, RelNode subtree) {
+        if (!(systemFetch instanceof RexLiteral fetchLit)) return systemFetch;
+        long fetch = RexLiteral.intValue(fetchLit);
+        int cap = resolveMinMaxResultWindow(subtree);
+        if (fetch <= cap) return systemFetch;
+        RexBuilder rexBuilder = subtree.getCluster().getRexBuilder();
+        return rexBuilder.makeExactLiteral(BigDecimal.valueOf(cap), systemFetch.getType());
+    }
+
+    /**
+     * Minimum {@code index.max_result_window} across every {@link OpenSearchTableScan}
+     * in {@code subtree}. Falls back to the setting's default when no scans are present
+     * (e.g. Sort over LogicalValues).
+     */
+    private int resolveMinMaxResultWindow(RelNode subtree) {
+        int defaultWindow = IndexSettings.MAX_RESULT_WINDOW_SETTING.getDefault(org.opensearch.common.settings.Settings.EMPTY);
+        int[] min = { Integer.MAX_VALUE };
+        boolean[] any = { false };
+        collectMinWindow(subtree, min, any);
+        return any[0] ? min[0] : defaultWindow;
+    }
+
+    private void collectMinWindow(RelNode node, int[] min, boolean[] any) {
+        RelNode current = RelNodeUtils.unwrapHep(node);
+        if (current instanceof OpenSearchTableScan scan) {
+            int window = readMaxResultWindow(scan);
+            if (window < min[0]) min[0] = window;
+            any[0] = true;
+            return;
+        }
+        for (RelNode input : current.getInputs()) {
+            collectMinWindow(input, min, any);
+        }
+    }
+
+    private int readMaxResultWindow(RelNode scan) {
+        String tableName = scan.getTable().getQualifiedName().getLast();
+        IndexMetadata indexMetadata = context.getClusterState().metadata().index(tableName);
+        // OpenSearchTableScanRule rejects unknown indices before this rule fires, so a
+        // missing IndexMetadata or null settings here is a planner bug.
+        assert indexMetadata != null : "IndexMetadata missing for [" + tableName + "]";
+        assert indexMetadata.getSettings() != null : "IndexMetadata.getSettings() null for [" + tableName + "]";
+        return IndexSettings.MAX_RESULT_WINDOW_SETTING.get(indexMetadata.getSettings());
     }
 
     /**

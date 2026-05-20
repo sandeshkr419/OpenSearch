@@ -143,6 +143,9 @@ public abstract class BasePlannerRulesTests extends OpenSearchTestCase {
         IndexMetadata indexMetadata = mock(IndexMetadata.class);
         when(indexMetadata.getIndex()).thenReturn(new Index("test_index", "uuid"));
         when(indexMetadata.getNumberOfShards()).thenReturn(shardCount);
+        // Empty settings: caller doesn't override anything; defaults apply
+        // (e.g. index.max_result_window defaults to 10000).
+        when(indexMetadata.getSettings()).thenReturn(Settings.EMPTY);
         when(metadata.index("test_index")).thenReturn(indexMetadata);
         when(clusterState.metadata()).thenReturn(metadata);
 

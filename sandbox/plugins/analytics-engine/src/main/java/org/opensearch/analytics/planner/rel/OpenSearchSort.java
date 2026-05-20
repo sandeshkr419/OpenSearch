@@ -27,13 +27,25 @@ import org.opensearch.analytics.spi.FieldStorageInfo;
 import java.util.List;
 
 /**
- * OpenSearch custom Sort carrying viable backend list.
+ * OpenSearch custom Sort carrying viable backend list and a distributed
+ * {@link ExecutionMode}.
+ *
+ * <ul>
+ *   <li>{@code SINGLE} — full sort in one pass on a single node. Always emitted by
+ *       marking; Volcano either keeps it or splits via
+ *       {@link org.opensearch.analytics.planner.rules.OpenSearchSortSplitRule}.</li>
+ *   <li>{@code PARTIAL} — shard-local top-K with {@code fetch = offset + fetch}
+ *       and {@code offset = null}.</li>
+ *   <li>{@code FINAL} — coordinator-side merge over gathered partial outputs,
+ *       carrying the original {@code offset} and {@code fetch}.</li>
+ * </ul>
  *
  * @opensearch.internal
  */
 public class OpenSearchSort extends Sort implements OpenSearchRelNode {
 
     private final List<String> viableBackends;
+    private final ExecutionMode mode;
 
     public OpenSearchSort(
         RelOptCluster cluster,
@@ -42,10 +54,16 @@ public class OpenSearchSort extends Sort implements OpenSearchRelNode {
         RelCollation collation,
         RexNode offset,
         RexNode fetch,
+        ExecutionMode mode,
         List<String> viableBackends
     ) {
         super(cluster, traitSet, input, collation, offset, fetch);
+        this.mode = mode;
         this.viableBackends = viableBackends;
+    }
+
+    public ExecutionMode getMode() {
+        return mode;
     }
 
     @Override
@@ -65,7 +83,7 @@ public class OpenSearchSort extends Sort implements OpenSearchRelNode {
 
     @Override
     public Sort copy(RelTraitSet traitSet, RelNode input, RelCollation collation, RexNode offset, RexNode fetch) {
-        return new OpenSearchSort(getCluster(), traitSet, input, collation, offset, fetch, viableBackends);
+        return new OpenSearchSort(getCluster(), traitSet, input, collation, offset, fetch, mode, viableBackends);
     }
 
     /**
@@ -83,18 +101,18 @@ public class OpenSearchSort extends Sort implements OpenSearchRelNode {
     }
 
     /**
-     * A collated Sort needs globally-ordered input. Our {@link OpenSearchExchangeReducer}
-     * is a concat gather (not a merge exchange), so per-partition sort + ER produces
-     * partition-locally ordered rows concatenated in arrival order — wrong. Returning
-     * infinite cost unless the input is EXECUTION(SINGLETON) forces Volcano to pick the
-     * {@link org.opensearch.analytics.planner.rules.OpenSearchSortSplitRule} alternative
-     * (ER below the Sort, Sort sees a fully-gathered input).
-     *
-     * <p>Pure LIMIT Sort (empty collation) — nothing to order, partition-local fetch is
-     * correct. Skip the gate.
+     * Cost gate: only {@code SINGLE} with non-empty collation over a non-SINGLETON
+     * input pays infinite cost — forces Volcano to pick the
+     * {@link org.opensearch.analytics.planner.rules.OpenSearchSortSplitRule}
+     * alternative. {@code PARTIAL} is shard-local by contract; {@code FINAL} sits
+     * over an ER (SINGLETON input by construction); pure-LIMIT {@code SINGLE} (empty
+     * collation) is partition-local-correct. All three are tiny.
      */
     @Override
     public RelOptCost computeSelfCost(RelOptPlanner planner, RelMetadataQuery mq) {
+        if (mode != ExecutionMode.SINGLE) {
+            return planner.getCostFactory().makeTinyCost();
+        }
         if (getCollation().getFieldCollations().isEmpty()) {
             return planner.getCostFactory().makeTinyCost();
         }
@@ -115,16 +133,17 @@ public class OpenSearchSort extends Sort implements OpenSearchRelNode {
 
     @Override
     public RelWriter explainTerms(RelWriter pw) {
-        return super.explainTerms(pw).item("viableBackends", viableBackends);
+        return super.explainTerms(pw).item("mode", mode).item("viableBackends", viableBackends);
     }
 
     @Override
     public RelNode copyResolved(String backend, List<RelNode> children, List<OperatorAnnotation> resolvedAnnotations) {
-        return new OpenSearchSort(getCluster(), getTraitSet(), children.getFirst(), getCollation(), offset, fetch, List.of(backend));
+        return new OpenSearchSort(getCluster(), getTraitSet(), children.getFirst(), getCollation(), offset, fetch, mode, List.of(backend));
     }
 
     @Override
     public RelNode stripAnnotations(List<RelNode> strippedChildren) {
+        // LogicalSort has no execution-mode concept; backend convertor only sees a logical Sort.
         return LogicalSort.create(strippedChildren.getFirst(), getCollation(), offset, fetch);
     }
 }

@@ -81,6 +81,7 @@ public class RelNodeUtils {
                 sort.getCollation(),
                 sort.offset,
                 sort.fetch,
+                sort.getMode(),
                 sort.getViableBackends()
             );
         } else if (node instanceof OpenSearchProject project) {

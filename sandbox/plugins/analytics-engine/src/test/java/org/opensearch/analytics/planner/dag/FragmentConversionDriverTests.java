@@ -241,6 +241,26 @@ public class FragmentConversionDriverTests extends BasePlannerRulesTests {
     }
 
     /**
+     * Multi-shard direct top-K: ORDER BY $0 ASC LIMIT 10 over a 2-shard scan. Two stages —
+     * shard runs PARTIAL Sort(fetch=10) ← Filter ← Scan, coord runs FINAL Sort(fetch=10).
+     * The shard fragment converts via the existing convertFragment path (Sort+Fetch ← Scan
+     * is natively handled by isthmus); the reduce fragment converts via convertReduceFragment
+     * (FINAL Sort over ER ← StageInputScan, the same single-input shape as a final aggregate).
+     */
+    public void testTwoStageTopKOverFilteredScan() {
+        RecordingConvertor convertor = new RecordingConvertor();
+        QueryDAG dag = buildAndConvert(
+            2,
+            makeSort(makeFilter(stubScan(mockTable("test_index", "status", "size")), makeEquals(0, SqlTypeName.INTEGER, 200)), 10),
+            convertor
+        );
+
+        assertEquals(1, dag.rootStage().getChildStages().size());
+        assertReduceStageConverted(convertor, dag.rootStage());
+        assertShardScanConverted(convertor, dag.rootStage().getChildStages().getFirst());
+    }
+
+    /**
      * Multi-shard Sort(Aggregate(Filter(Scan))) with limit — full OLAP pipeline, two stages.
      */
     public void testTwoStageSortOnAggregateOnFilteredScan() {
