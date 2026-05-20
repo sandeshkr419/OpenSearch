@@ -17,7 +17,7 @@ import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.sql.SqlAggFunction;
-import org.opensearch.analytics.planner.rel.AggregateMode;
+import org.opensearch.analytics.planner.rel.ExecutionMode;
 import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
 import org.opensearch.analytics.planner.rel.OpenSearchProject;
 import org.opensearch.analytics.planner.rel.OpenSearchStageInputScan;
@@ -153,7 +153,7 @@ final class DistributedAggregateRewriter {
             finalAgg.getGroupSet(),
             finalAgg.getGroupSets(),
             rebuiltCalls,
-            AggregateMode.FINAL,
+            ExecutionMode.FINAL,
             finalAgg.getViableBackends(),
             finalAgg.getCallAnnotations(),
             // Cleared so a later copy doesn't re-inject the literal Project.

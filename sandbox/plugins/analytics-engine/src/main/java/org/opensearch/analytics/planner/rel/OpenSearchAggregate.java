@@ -44,7 +44,7 @@ import java.util.Map;
 public class OpenSearchAggregate extends Aggregate implements OpenSearchRelNode {
 
     private final List<String> viableBackends;
-    private final AggregateMode mode;
+    private final ExecutionMode mode;
     /**
      * Per-call annotations keyed by call index in {@link #getAggCallList()}. May be empty when
      * the aggregate has no annotations yet (pre-marking) or when copied from a Calcite-internal
@@ -67,7 +67,7 @@ public class OpenSearchAggregate extends Aggregate implements OpenSearchRelNode 
         ImmutableBitSet groupSet,
         List<ImmutableBitSet> groupSets,
         List<AggregateCall> aggCalls,
-        AggregateMode mode,
+        ExecutionMode mode,
         List<String> viableBackends,
         Map<Integer, AggregateCallAnnotation> callAnnotations
     ) {
@@ -81,7 +81,7 @@ public class OpenSearchAggregate extends Aggregate implements OpenSearchRelNode 
         ImmutableBitSet groupSet,
         List<ImmutableBitSet> groupSets,
         List<AggregateCall> aggCalls,
-        AggregateMode mode,
+        ExecutionMode mode,
         List<String> viableBackends,
         Map<Integer, AggregateCallAnnotation> callAnnotations,
         Map<Integer, List<RexLiteral>> finalExtraLiteralArgs
@@ -93,7 +93,7 @@ public class OpenSearchAggregate extends Aggregate implements OpenSearchRelNode 
         this.finalExtraLiteralArgs = Map.copyOf(finalExtraLiteralArgs);
     }
 
-    public AggregateMode getMode() {
+    public ExecutionMode getMode() {
         return mode;
     }
 
@@ -169,7 +169,7 @@ public class OpenSearchAggregate extends Aggregate implements OpenSearchRelNode 
      */
     @Override
     public RelOptCost computeSelfCost(RelOptPlanner planner, RelMetadataQuery mq) {
-        if (mode == AggregateMode.SINGLE) {
+        if (mode == ExecutionMode.SINGLE) {
             for (int index = 0; index < getInput().getTraitSet().size(); index++) {
                 RelTrait trait = getInput().getTraitSet().getTrait(index);
                 if (!(trait instanceof OpenSearchDistribution distribution)) continue;

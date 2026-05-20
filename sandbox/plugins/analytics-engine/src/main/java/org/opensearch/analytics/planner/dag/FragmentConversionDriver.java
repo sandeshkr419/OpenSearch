@@ -17,8 +17,8 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.analytics.planner.CapabilityRegistry;
 import org.opensearch.analytics.planner.RelNodeUtils;
-import org.opensearch.analytics.planner.rel.AggregateMode;
 import org.opensearch.analytics.planner.rel.AnnotatedPredicate;
+import org.opensearch.analytics.planner.rel.ExecutionMode;
 import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
 import org.opensearch.analytics.planner.rel.OpenSearchExchangeReducer;
 import org.opensearch.analytics.planner.rel.OpenSearchFilter;
@@ -300,7 +300,7 @@ public class FragmentConversionDriver {
         if (leaf instanceof OpenSearchTableScan) {
             // Partial agg at top: convert everything below it, then attach partial agg on top.
             // strippedInputs passed to stripAnnotations for schema validity (LogicalAggregate needs its inputs).
-            if (resolvedFragment instanceof OpenSearchAggregate agg && agg.getMode() == AggregateMode.PARTIAL) {
+            if (resolvedFragment instanceof OpenSearchAggregate agg && agg.getMode() == ExecutionMode.PARTIAL) {
                 List<RelNode> strippedInputs = agg.getInputs().stream().map(input -> strip(input, delegationBytes)).toList();
                 byte[] innerBytes = convertor.convertFragment(strippedInputs.getFirst());
                 Function<OperatorAnnotation, RexNode> resolver = delegationBytes.resolverFor(agg, agg.getCluster().getRexBuilder());

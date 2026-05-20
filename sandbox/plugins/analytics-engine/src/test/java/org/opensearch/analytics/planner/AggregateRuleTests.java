@@ -14,7 +14,7 @@ import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.type.SqlTypeName;
 import org.opensearch.analytics.planner.rel.AggregateCallAnnotation;
-import org.opensearch.analytics.planner.rel.AggregateMode;
+import org.opensearch.analytics.planner.rel.ExecutionMode;
 import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
 import org.opensearch.analytics.planner.rel.OpenSearchExchangeReducer;
 import org.opensearch.analytics.planner.rel.OpenSearchFilter;
@@ -70,14 +70,14 @@ public class AggregateRuleTests extends BasePlannerRulesTests {
             Set.of(MockDataFusionBackend.NAME)
         );
         OpenSearchAggregate finalAgg = (OpenSearchAggregate) unwrapRootReducer(result);
-        assertEquals(AggregateMode.FINAL, finalAgg.getMode());
+        assertEquals(ExecutionMode.FINAL, finalAgg.getMode());
         OpenSearchAggregate partialAgg = (OpenSearchAggregate) finalAgg.getInputs().get(0).getInputs().get(0);
-        assertEquals(AggregateMode.PARTIAL, partialAgg.getMode());
+        assertEquals(ExecutionMode.PARTIAL, partialAgg.getMode());
     }
 
     public void testNoSplitOnSingleShard() {
         OpenSearchAggregate agg = runAggregate(1, sumCall());
-        assertEquals(AggregateMode.SINGLE, agg.getMode());
+        assertEquals(ExecutionMode.SINGLE, agg.getMode());
         assertPipelineViableBackends(
             agg,
             List.of(OpenSearchAggregate.class, OpenSearchTableScan.class),

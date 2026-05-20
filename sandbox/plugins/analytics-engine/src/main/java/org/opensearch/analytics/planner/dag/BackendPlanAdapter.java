@@ -25,7 +25,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.analytics.planner.CapabilityRegistry;
 import org.opensearch.analytics.planner.RelNodeUtils;
-import org.opensearch.analytics.planner.rel.AggregateMode;
+import org.opensearch.analytics.planner.rel.ExecutionMode;
 import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
 import org.opensearch.analytics.planner.rel.OpenSearchFilter;
 import org.opensearch.analytics.planner.rel.OpenSearchProject;
@@ -99,7 +99,7 @@ public class BackendPlanAdapter {
         if (node instanceof OpenSearchProject project) {
             return adaptProject(project, adapters, adaptedChildren, childrenChanged);
         }
-        if (node instanceof OpenSearchAggregate agg && agg.getMode() == AggregateMode.FINAL) {
+        if (node instanceof OpenSearchAggregate agg && agg.getMode() == ExecutionMode.FINAL) {
             OpenSearchAggregate withAdaptedChildren = childrenChanged
                 ? (OpenSearchAggregate) agg.copy(agg.getTraitSet(), adaptedChildren)
                 : agg;

@@ -20,7 +20,7 @@ import org.opensearch.analytics.planner.CapabilityRegistry;
 import org.opensearch.analytics.planner.PlannerContext;
 import org.opensearch.analytics.planner.RelNodeUtils;
 import org.opensearch.analytics.planner.rel.AggregateCallAnnotation;
-import org.opensearch.analytics.planner.rel.AggregateMode;
+import org.opensearch.analytics.planner.rel.ExecutionMode;
 import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
 import org.opensearch.analytics.planner.rel.OpenSearchRelNode;
 import org.opensearch.analytics.spi.AggregateFunction;
@@ -117,7 +117,7 @@ public class OpenSearchAggregateRule extends RelOptRule {
                 aggregate.getGroupSet(),
                 aggregate.getGroupSets(),
                 aggCalls,
-                AggregateMode.SINGLE,
+                ExecutionMode.SINGLE,
                 viableBackends,
                 callAnnotations
             )

@@ -15,7 +15,7 @@ import org.apache.calcite.plan.RelTraitSet;
 import org.apache.calcite.rel.RelDistribution;
 import org.apache.calcite.rel.RelNode;
 import org.opensearch.analytics.planner.PlannerContext;
-import org.opensearch.analytics.planner.rel.AggregateMode;
+import org.opensearch.analytics.planner.rel.ExecutionMode;
 import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
 import org.opensearch.analytics.planner.rel.OpenSearchDistribution;
 import org.opensearch.analytics.planner.rel.OpenSearchDistributionTraitDef;
@@ -107,7 +107,7 @@ public class OpenSearchDistributionDeriveRule extends RelOptRule {
         // bypass {@link OpenSearchAggregateSplitRule}'s PARTIAL/FINAL decomposition and
         // ship raw rows to coord instead of pre-aggregating. PARTIAL and FINAL CAN be
         // derived — needed so nested aggregates over coord-side pipelines can plan.
-        if (rel instanceof OpenSearchAggregate aggregate && aggregate.getMode() == AggregateMode.SINGLE) return false;
+        if (rel instanceof OpenSearchAggregate aggregate && aggregate.getMode() == ExecutionMode.SINGLE) return false;
         return !isSingleton(rel.getTraitSet());
     }
 

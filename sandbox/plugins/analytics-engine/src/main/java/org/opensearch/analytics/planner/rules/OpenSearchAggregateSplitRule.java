@@ -18,7 +18,7 @@ import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexNode;
 import org.opensearch.analytics.planner.PlannerContext;
 import org.opensearch.analytics.planner.RelNodeUtils;
-import org.opensearch.analytics.planner.rel.AggregateMode;
+import org.opensearch.analytics.planner.rel.ExecutionMode;
 import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
 import org.opensearch.analytics.planner.rel.OpenSearchConvention;
 import org.opensearch.analytics.spi.AggregateFunction;
@@ -49,7 +49,7 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
     @Override
     public boolean matches(RelOptRuleCall call) {
         OpenSearchAggregate aggregate = call.rel(0);
-        return aggregate.getMode() == AggregateMode.SINGLE;
+        return aggregate.getMode() == ExecutionMode.SINGLE;
     }
 
     @Override
@@ -67,7 +67,7 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
             aggregate.getGroupSet(),
             aggregate.getGroupSets(),
             aggregate.getAggCallList(),
-            AggregateMode.SINGLE,
+            ExecutionMode.SINGLE,
             aggregate.getViableBackends(),
             aggregate.getCallAnnotations()
         );
@@ -86,7 +86,7 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
             aggregate.getGroupSet(),
             aggregate.getGroupSets(),
             partialAggCalls,
-            AggregateMode.PARTIAL,
+            ExecutionMode.PARTIAL,
             aggregate.getViableBackends(),
             aggregate.getCallAnnotations()
         );
@@ -101,7 +101,7 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
             aggregate.getGroupSet(),
             aggregate.getGroupSets(),
             aggregate.getAggCallList(),
-            AggregateMode.FINAL,
+            ExecutionMode.FINAL,
             aggregate.getViableBackends(),
             aggregate.getCallAnnotations(),
             finalExtraLiterals
