@@ -29,6 +29,10 @@ import java.util.concurrent.CompletableFuture;
 /**
  * Smoke test for the DataFusion JNI bridge.
  * Verifies native library loading, runtime creation, and reader lifecycle.
+ *
+ * <p>The Tokio runtime initialised here is shared across the test JVM and intentionally
+ * outlives this suite (see {@code initTokioRuntimeManager} note below) — disable
+ * thread-leak detection at the suite scope.
  */
 // The Tokio IO runtime thread is a process-lifetime singleton spawned by the native Rust library.
 // It persists after tests complete and cannot be interrupted (empty Java stack, RUNNABLE state).

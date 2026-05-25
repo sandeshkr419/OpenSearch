@@ -26,6 +26,7 @@ import org.opensearch.analytics.exec.action.AnalyticsQueryAction;
 import org.opensearch.analytics.planner.CapabilityRegistry;
 import org.opensearch.analytics.planner.FieldStorageResolver;
 import org.opensearch.analytics.schema.OpenSearchSchemaBuilder;
+import org.opensearch.analytics.settings.AnalyticsApproximationSettings;
 import org.opensearch.analytics.spi.AnalyticsSearchBackendPlugin;
 import org.opensearch.arrow.allocator.ArrowNativeAllocator;
 import org.opensearch.arrow.spi.NativeAllocatorPoolConfig;
@@ -172,7 +173,11 @@ public class AnalyticsPlugin extends Plugin implements ExtensiblePlugin, ActionP
 
     @Override
     public List<Setting<?>> getSettings() {
-        return List.of(COORDINATOR_BUFFER_LIMIT, ReaderContextStore.READER_CONTEXT_KEEP_ALIVE);
+        List<Setting<?>> settings = new ArrayList<>();
+        settings.add(COORDINATOR_BUFFER_LIMIT);
+        settings.add(ReaderContextStore.READER_CONTEXT_KEEP_ALIVE);
+        settings.addAll(AnalyticsApproximationSettings.all());
+        return List.copyOf(settings);
     }
 
     @Override

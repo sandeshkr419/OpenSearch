@@ -15,24 +15,36 @@ import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.rel.core.Project;
 import org.apache.calcite.rel.type.RelDataType;
+import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexNode;
-import org.apache.calcite.sql.SqlAggFunction;
 import org.apache.calcite.sql.type.SqlTypeFamily;
+import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.util.ImmutableBitSet;
 import org.opensearch.analytics.planner.PlannerContext;
 import org.opensearch.analytics.planner.RelNodeUtils;
 import org.opensearch.analytics.planner.rel.AggregateMode;
 import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
 import org.opensearch.analytics.planner.rel.OpenSearchConvention;
+import org.opensearch.analytics.planner.rel.OpenSearchSort;
+import org.opensearch.analytics.planner.rel.ShardBucketHint;
 import org.opensearch.analytics.spi.AggregateFunction;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Splits an {@link OpenSearchAggregate} into PARTIAL + FINAL when the input is partitioned. */
+/**
+ * Volcano rule that splits an {@link OpenSearchAggregate} into PARTIAL + FINAL when the
+ * input is partitioned. Both halves carry the original aggCall list — actual aggregate-call
+ * rewriting (arg rebasing, COUNT→SUM, engine-native merge) runs post-Volcano in
+ * {@link org.opensearch.analytics.planner.dag.DistributedAggregateRewriter}. The exchange
+ * is inserted automatically via the SINGLETON trait request on partial's output.
+ *
+ * @opensearch.internal
+ */
 public class OpenSearchAggregateSplitRule extends RelOptRule {
 
     private final PlannerContext context;
@@ -48,10 +60,44 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
         return aggregate.getMode() == AggregateMode.SINGLE;
     }
 
-    /** Skip the PARTIAL/FINAL split when it would emit a row type that fails Volcano's typeMatchesInferred. */
+    /**
+     * True when PARTIAL/FINAL split would yield a malformed row type or invalid aggregate
+     * semantics. In those cases {@link #onMatch} still produces the SINGLE+SINGLETON
+     * alternative (so the planner can route shard input through a coordinator gather), but
+     * skips the PARTIAL+ER+FINAL alternative.
+     *
+     * <p>Two cases are unsafe today:
+     * <ul>
+     *   <li><b>percentile_approx</b> is a 2-arg aggregate (field, percent) whose FINAL phase
+     *       needs (tdigest_state, percent_literal). {@code AggregateDecompositionResolver}'s
+     *       single-field rewrite paths only produce a single-arg FINAL call, yielding
+     *       {@code "Type mismatch: rel rowtype: RecordType(BIGINT p50, BIGINT p50_0) NOT NULL,
+     *       equiv rowtype: RecordType(INTEGER bucket, BIGINT p50)"}. Other aggCalls in the
+     *       same Aggregate (SUM, AVG, etc.) inherit the single-stage execution.</li>
+     *   <li><b>Cross-family non-prefix groupSet</b>: PARTIAL's output places group keys at
+     *       positions {@code [0..groupCount)}. FINAL reuses ORIGINAL's groupSet against
+     *       PARTIAL's output. When an input column at index {@code k >= groupCount} is a group
+     *       key (e.g. {@code groupSet={2}, groupCount=1}), PARTIAL's output at index {@code k}
+     *       is an agg-result instead, and Calcite's row-type equivalence check fires only if
+     *       that agg-result's {@link SqlTypeFamily} differs from the ORIGINAL input column's
+     *       family. PPL {@code timechart}'s no-{@code by} form trips this: the Project below
+     *       the Aggregate keeps the raw {@code @timestamp} (DATETIME family) at position 0
+     *       and materializes {@code SPAN(@timestamp)} at a later position; the agg result at
+     *       that later position is {@code DOUBLE} (NUMERIC family) → cross-family mismatch
+     *       ({@code "Type mismatch ... DOUBLE -> TIMESTAMP(0)"}). Same-family non-prefix
+     *       cases (e.g. {@code group={1}} with both columns INTEGER + a NUMERIC agg) pass
+     *       Calcite's relaxed numeric type check and don't need the skip — see
+     *       {@code PlanShapeTests.testJoinWithDifferentGroupKeys_multiShard}.</li>
+     * </ul>
+     *
+     * <p>Until {@code AggregateDecompositionResolver} gains engine-native merge support
+     * (percentile_approx) and ORIGINAL→FINAL groupSet remapping (cross-family non-prefix),
+     * the split is conservative in those shapes — distributed parallelism is traded for
+     * correctness.
+     */
     private static boolean shouldSkipPartialFinalSplit(OpenSearchAggregate aggregate) {
         for (AggregateCall aggCall : aggregate.getAggCallList()) {
-            if (isStateExpanding(aggCall.getAggregation())) {
+            if (isPercentileApprox(aggCall)) {
                 return true;
             }
         }
@@ -59,7 +105,10 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
         if (aggregate.getGroupSet().equals(ImmutableBitSet.range(groupCount))) {
             return false;
         }
-        // Non-prefix groupSet: a group-key at k >= groupCount lands on PARTIAL's agg-output slot.
+        // Non-prefix groupSet — narrow to the cross-family case that actually trips
+        // typeMatchesInferred. Each group-key index k >= groupCount would land on PARTIAL's
+        // agg-output slot at (k - groupCount). If that agg's result type and the ORIGINAL
+        // input column at k belong to different families, the split is unsafe.
         List<RelDataType> inputFields = aggregate.getInput().getRowType().getFieldList().stream().map(f -> f.getType()).toList();
         List<AggregateCall> aggCalls = aggregate.getAggCallList();
         for (int k : aggregate.getGroupSet().toArray()) {
@@ -68,7 +117,7 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
             }
             int aggIdx = k - groupCount;
             if (aggIdx >= aggCalls.size() || k >= inputFields.size()) {
-                return true;
+                return true;  // out of bounds → split would be structurally invalid
             }
             SqlTypeFamily inputFamily = inputFields.get(k).getSqlTypeName().getFamily();
             SqlTypeFamily aggFamily = aggCalls.get(aggIdx).getType().getSqlTypeName().getFamily();
@@ -79,12 +128,8 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
         return false;
     }
 
-    private static boolean isStateExpanding(SqlAggFunction op) {
-        try {
-            return AggregateFunction.fromSqlAggFunction(op).getType() == AggregateFunction.Type.STATE_EXPANDING;
-        } catch (IllegalStateException ignored) {
-            return false;
-        }
+    private static boolean isPercentileApprox(AggregateCall aggCall) {
+        return "PERCENTILE_APPROX".equalsIgnoreCase(aggCall.getAggregation().getName());
     }
 
     @Override
@@ -92,6 +137,10 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
         OpenSearchAggregate aggregate = call.rel(0);
         RelNode child = call.rel(1);
 
+        // SINGLE-on-SINGLETON alternative — wins when the child already gathers below.
+        // Also the *only* alternative the rule offers when the PARTIAL/FINAL split would
+        // emit a row type that fails Volcano's typeMatchesInferred — see
+        // shouldSkipPartialFinalSplit for the cases.
         RelTraitSet singletonTraits = aggregate.getTraitSet().replace(context.getDistributionTraitDef().coordSingleton());
         RelNode singletonChild = convert(child, singletonTraits);
         OpenSearchAggregate singleOnSingleton = new OpenSearchAggregate(
@@ -103,14 +152,24 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
             aggregate.getAggCallList(),
             AggregateMode.SINGLE,
             aggregate.getViableBackends(),
-            aggregate.getCallAnnotations()
+            aggregate.getCallAnnotations(),
+            Map.of(),
+            aggregate.getShardBucketHint()
         );
 
         if (shouldSkipPartialFinalSplit(aggregate)) {
+            // The PARTIAL/FINAL alternative would emit a row type that fails Volcano's
+            // typeMatchesInferred check. Transform to the SINGLE+SINGLETON alternative
+            // so a coordinator-side gather still satisfies a SINGLETON-demanding parent.
             call.transformTo(singleOnSingleton);
             return;
         }
 
+        // PARTIAL + ER + FINAL alternative — wins when child is shard-partitioned.
+        // Repair LIST/VALUES return type from PPL's lossy ARRAY<VARCHAR> to ARRAY<arg0> on
+        // PARTIAL only, so the StageInputScan column type (and thus the FINAL substrait's
+        // base_schema) matches what DataFusion's array_agg actually produces. FINAL keeps
+        // the original aggCall list to satisfy Volcano's parent row-type check.
         List<AggregateCall> partialAggCalls = repairLossyReturnTypes(aggregate.getAggCallList(), child);
         RelTraitSet partialTraits = child.getTraitSet().replace(OpenSearchConvention.INSTANCE);
         OpenSearchAggregate partial = new OpenSearchAggregate(
@@ -124,8 +183,13 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
             aggregate.getViableBackends(),
             aggregate.getCallAnnotations()
         );
+
+        // Shard-bucket oversampling: when a ShardBucketHint is present, replaces partial with
+        // a shard-local FINAL+Sort+Limit so each shard ships at most shardSize buckets.
+        RelNode partialOrShardSort = maybeInsertShardSort(aggregate, child, partial, partialAggCalls);
+
         RelTraitSet finalTraits = partial.getTraitSet().replace(context.getDistributionTraitDef().coordSingleton());
-        RelNode gathered = convert(partial, finalTraits);
+        RelNode gathered = convert(partialOrShardSort, finalTraits);
         Map<Integer, List<RexLiteral>> finalExtraLiterals = captureLiteralArgsForFinal(aggregate.getAggCallList(), child);
 
         OpenSearchAggregate finalAggregate = new OpenSearchAggregate(
@@ -145,7 +209,80 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
         call.transformTo(finalAggregate);
     }
 
-    /** Re-declare LIST/VALUES return type as {@code ARRAY<arg0>} (PPL lowers it to {@code ARRAY<VARCHAR>}). */
+    /**
+     * If {@code aggregate} carries a {@link ShardBucketHint}, replaces {@code partial} with a
+     * shard-local merge aggregate plus a {@code localTopK} {@link OpenSearchSort}.
+     *
+     * <p>Mode is FINAL for additive aggregates (SUM/MIN/MAX/COUNT/AVG/...): shard emits per-group
+     * scalars, coord FINAL re-aggregates. Mode is SHARD_MERGE when any aggCall is engine-native
+     * merge (e.g. APPROX_COUNT_DISTINCT): shard emits intermediate state (Binary HLL sketch),
+     * coord runs state-merge via {@link org.opensearch.analytics.planner.dag.DistributedAggregateRewriter};
+     * the Sort sortExprs use {@link AggregateFunction#finalizeOperator} (e.g. {@code hll_estimate(state)}).
+     *
+     * <p>Returns {@code partial} unchanged when no hint is present.
+     */
+    private static RelNode maybeInsertShardSort(
+        OpenSearchAggregate aggregate,
+        RelNode child,
+        OpenSearchAggregate partial,
+        List<AggregateCall> partialAggCalls
+    ) {
+        ShardBucketHint hint = aggregate.getShardBucketHint();
+        if (hint == null) {
+            return partial;
+        }
+        boolean anyEngineNativeMerge = hasEngineNativeMergeAggCall(aggregate.getAggCallList());
+        AggregateMode shardMode = anyEngineNativeMerge ? AggregateMode.SHARD_MERGE : AggregateMode.FINAL;
+        OpenSearchAggregate shardLocalAgg = new OpenSearchAggregate(
+            aggregate.getCluster(),
+            partial.getTraitSet(),
+            child,
+            aggregate.getGroupSet(),
+            aggregate.getGroupSets(),
+            partialAggCalls,
+            shardMode,
+            aggregate.getViableBackends(),
+            aggregate.getCallAnnotations()
+        );
+        RexBuilder rexBuilder = aggregate.getCluster().getRexBuilder();
+        RelDataType intType = aggregate.getCluster().getTypeFactory().createSqlType(SqlTypeName.INTEGER);
+        RexNode shardFetch = rexBuilder.makeExactLiteral(BigDecimal.valueOf(hint.shardSize()), intType);
+        return new OpenSearchSort(
+            shardLocalAgg.getCluster(),
+            shardLocalAgg.getTraitSet(),
+            shardLocalAgg,
+            hint.collation(),
+            null,
+            shardFetch,
+            shardLocalAgg.getViableBackends(),
+            /* localTopK */ true,
+            hint.sortExprs()
+        );
+    }
+
+    /** True when any aggCall is engine-native merge (intermediate state shape != final scalar shape, e.g. HLL Binary sketch for {@code APPROX_COUNT_DISTINCT}). */
+    private static boolean hasEngineNativeMergeAggCall(List<AggregateCall> aggCalls) {
+        for (AggregateCall call : aggCalls) {
+            if (isEngineNativeMerge(call)) return true;
+        }
+        return false;
+    }
+
+    private static boolean isEngineNativeMerge(AggregateCall call) {
+        AggregateFunction fn = AggregateFunction.fromSqlAggFunction(call.getAggregation());
+        if (fn == null) return false;
+        if (fn.getType() != AggregateFunction.Type.APPROXIMATE) return false;
+        List<AggregateFunction.IntermediateField> fields = fn.intermediateFields();
+        if (fields == null || fields.size() != 1) return false;
+        return fields.get(0).reducer() == fn;
+    }
+
+    /**
+     * Rebuild any LIST/VALUES aggCall to declare {@code ARRAY<actual-arg0>} instead of
+     * PPL's lossy {@code ARRAY<VARCHAR>}. Pass-through for every other call. Used on the
+     * PARTIAL side only — the FINAL keeps the original call list so Volcano's parent
+     * row-type check on transformTo passes.
+     */
     private static List<AggregateCall> repairLossyReturnTypes(List<AggregateCall> aggCalls, RelNode input) {
         List<AggregateCall> rebuilt = null;
         for (int i = 0; i < aggCalls.size(); i++) {
@@ -189,6 +326,7 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
             if (fn == null || fn.getType() != AggregateFunction.Type.STATE_EXPANDING) continue;
             List<Integer> args = call.getArgList();
             if (args.size() < 2) continue;
+            // arg 0 is the value/state column; args 1+ are the configuration literals.
             List<RexLiteral> literals = new ArrayList<>(args.size() - 1);
             boolean allLiteral = true;
             for (int a = 1; a < args.size(); a++) {
