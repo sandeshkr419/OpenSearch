@@ -519,7 +519,7 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         // operator identity through ADDITIONAL_AGGREGATE_SIGS.
         preprocessed = PplAggregateCallRewriter.rewrite(preprocessed);
         // Rewrite OpenSearchSort with expression-based collation (the shard-bucket
-        // oversampling rule's localTopK Sort over engine-native-merge / decomposed
+        // oversampling rule's perPartition Sort over engine-native-merge / decomposed
         // aggregates) into a Project(drop) → Sort → Project(lift) chain so the
         // isthmus visitor emits standard substrait constructs.
         preprocessed = OpenSearchSortExpressionRewriter.rewrite(preprocessed);

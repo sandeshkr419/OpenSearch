@@ -94,7 +94,7 @@ public class RelNodeUtils {
                 sort.offset,
                 sort.fetch,
                 sort.getViableBackends(),
-                sort.isLocalTopK(),
+                sort.isPerPartition(),
                 sort.getSortExprs()
             );
         } else if (node instanceof OpenSearchProject project) {

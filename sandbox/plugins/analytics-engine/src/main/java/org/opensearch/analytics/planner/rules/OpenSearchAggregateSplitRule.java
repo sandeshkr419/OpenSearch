@@ -211,7 +211,7 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
 
     /**
      * If {@code aggregate} carries a {@link ShardBucketHint}, replaces {@code partial} with a
-     * shard-local merge aggregate plus a {@code localTopK} {@link OpenSearchSort}.
+     * shard-local merge aggregate plus a {@code perPartition} {@link OpenSearchSort}.
      *
      * <p>Mode is FINAL for additive aggregates (SUM/MIN/MAX/COUNT/AVG/...): shard emits per-group
      * scalars, coord FINAL re-aggregates. Mode is SHARD_MERGE when any aggCall is engine-native
@@ -255,7 +255,7 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
             null,
             shardFetch,
             shardLocalAgg.getViableBackends(),
-            /* localTopK */ true,
+            /* perPartition */ true,
             hint.sortExprs()
         );
     }

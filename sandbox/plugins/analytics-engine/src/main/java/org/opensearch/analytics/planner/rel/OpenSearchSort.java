@@ -34,8 +34,8 @@ import java.util.List;
 public class OpenSearchSort extends Sort implements OpenSearchRelNode {
 
     private final List<String> viableBackends;
-    /** Shard-local top-K — per-partition sort+limit; bypasses the gather-first gate in {@link #computeSelfCost}. */
-    private final boolean localTopK;
+    /** Per-partition Sort — runs without globally-ordered input; bypasses the gather-first gate in {@link #computeSelfCost}. */
+    private final boolean perPartition;
     /** Per-collation-field RexNodes; lifted into a Project below the Sort by the convertor. {@code null} for plain field-index collation. */
     private final List<RexNode> sortExprs;
 
@@ -59,12 +59,12 @@ public class OpenSearchSort extends Sort implements OpenSearchRelNode {
         RexNode offset,
         RexNode fetch,
         List<String> viableBackends,
-        boolean localTopK,
+        boolean perPartition,
         List<RexNode> sortExprs
     ) {
         super(cluster, traitSet, input, collation, offset, fetch);
         this.viableBackends = viableBackends;
-        this.localTopK = localTopK;
+        this.perPartition = perPartition;
         if (sortExprs != null && sortExprs.size() != collation.getFieldCollations().size()) {
             throw new IllegalArgumentException(
                 "sortExprs arity ["
@@ -77,9 +77,9 @@ public class OpenSearchSort extends Sort implements OpenSearchRelNode {
         this.sortExprs = sortExprs == null ? null : List.copyOf(sortExprs);
     }
 
-    /** True when this Sort is a shard-local top-K — see {@link #localTopK}. */
-    public boolean isLocalTopK() {
-        return localTopK;
+    /** True when this Sort runs per-partition without first gathering — see {@link #perPartition}. */
+    public boolean isPerPartition() {
+        return perPartition;
     }
 
     /**
@@ -112,7 +112,7 @@ public class OpenSearchSort extends Sort implements OpenSearchRelNode {
 
     @Override
     public Sort copy(RelTraitSet traitSet, RelNode input, RelCollation collation, RexNode offset, RexNode fetch) {
-        return new OpenSearchSort(getCluster(), traitSet, input, collation, offset, fetch, viableBackends, localTopK, sortExprs);
+        return new OpenSearchSort(getCluster(), traitSet, input, collation, offset, fetch, viableBackends, perPartition, sortExprs);
     }
 
     /** Concrete physical operator, not a collation enforcer — Volcano otherwise registers an undelivered required-subset that breaks the gather-rule path. */
@@ -123,14 +123,14 @@ public class OpenSearchSort extends Sort implements OpenSearchRelNode {
 
     /**
      * A collated Sort needs globally-ordered input — our {@link OpenSearchExchangeReducer} is a concat gather (not merge exchange),
-     * so we require SINGLETON input. Pure-LIMIT (empty collation) and {@link #localTopK} Sorts skip the gate (partition-local fetch / top-K is correct).
+     * so we require SINGLETON input. Pure-LIMIT (empty collation) and {@link #perPartition} Sorts skip the gate (partition-local fetch / top-K is correct).
      */
     @Override
     public RelOptCost computeSelfCost(RelOptPlanner planner, RelMetadataQuery mq) {
         if (getCollation().getFieldCollations().isEmpty()) {
             return planner.getCostFactory().makeTinyCost();
         }
-        if (localTopK) {
+        if (perPartition) {
             return planner.getCostFactory().makeTinyCost();
         }
         for (RelNode input : getInputs()) {
@@ -168,7 +168,7 @@ public class OpenSearchSort extends Sort implements OpenSearchRelNode {
             offset,
             fetch,
             List.of(backend),
-            localTopK,
+            perPartition,
             sortExprs
         );
     }

@@ -43,7 +43,7 @@ public class OpenSearchSortSplitRule extends RelOptRule {
         if (sort.getCollation().getFieldCollations().isEmpty()) {
             return false; // pure LIMIT — skip
         }
-        if (sort.isLocalTopK()) {
+        if (sort.isPerPartition()) {
             return false; // shard-local top-K — keep partition-local, don't gather
         }
         return !isSingleton(sort.getInput()) || !isSingleton(sort);
