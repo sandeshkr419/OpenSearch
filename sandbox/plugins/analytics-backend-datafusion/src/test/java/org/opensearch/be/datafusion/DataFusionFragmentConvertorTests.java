@@ -38,6 +38,7 @@ import io.substrait.proto.AggregateFunction;
 import io.substrait.proto.AggregateRel;
 import io.substrait.proto.AggregationPhase;
 import io.substrait.proto.Expression;
+import io.substrait.proto.FetchRel;
 import io.substrait.proto.FilterRel;
 import io.substrait.proto.Plan;
 import io.substrait.proto.PlanRel;
@@ -290,6 +291,45 @@ public class DataFusionFragmentConvertorTests extends OpenSearchTestCase {
         Rel aggInput = inner.getAggregate().getInput();
         assertTrue("Agg input must be a ReadRel", aggInput.hasRead());
         assertEquals(List.of("input-" + childStageId), aggInput.getRead().getNamedTable().getNamesList());
+    }
+
+    /**
+     * Regression: a {@link LogicalSort} carrying both collation and a {@code fetch} is split by
+     * isthmus into substrait {@code Fetch(Sort(child))}. {@code attachFragmentOnTop} must
+     * preserve the inner {@code SortRel} when rewiring — a flat {@code Fetch.input} swap
+     * would drop the Sort, shipping unsorted rows past the Limit.
+     */
+    public void testAttachFragmentOnTop_SortWithFetch_PreservesInnerSort() throws Exception {
+        DataFusionFragmentConvertor convertor = newConvertor();
+
+        // Inner: final-agg over stage-input.
+        RelDataType stageRowType = rowType("A");
+        int childStageId = 7;
+        RelNode stageInput = new OpenSearchStageInputScan(cluster, cluster.traitSet(), childStageId, stageRowType, List.of("datafusion"));
+        LogicalAggregate finalAgg = buildSumAggregate(stageInput, 0);
+        byte[] innerBytes = convertor.convertFragment(finalAgg);
+
+        // Wrapper: Sort with BOTH collation and fetch (the user's `... | sort | head 10` shape).
+        RelNode placeholderInput = buildTableScan("__placeholder__", "sum_col");
+        LogicalSort sortWithFetch = LogicalSort.create(
+            placeholderInput,
+            RelCollations.of(0),
+            null,
+            rexBuilder.makeLiteral(10, typeFactory.createSqlType(SqlTypeName.INTEGER), true)
+        );
+
+        byte[] combined = convertor.attachFragmentOnTop(sortWithFetch, innerBytes);
+
+        Plan plan = decodeSubstrait(combined);
+        Rel root = rootRel(plan);
+        assertTrue("root must be a FetchRel", root.hasFetch());
+        FetchRel fetchRel = root.getFetch();
+        assertEquals("Fetch.count must match the user's LIMIT", 10L, fetchRel.getCount());
+        Rel underFetch = fetchRel.getInput();
+        assertTrue("Fetch.input must be a SortRel — Sort must NOT be stripped during rewire", underFetch.hasSort());
+        SortRel sortRel = underFetch.getSort();
+        Rel underSort = sortRel.getInput();
+        assertTrue("Sort.input must be the rewired inner agg", underSort.hasAggregate());
     }
 
     /**
