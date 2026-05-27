@@ -46,9 +46,8 @@ public class AggregateShardBucketTests extends PlanShapeTestBase {
                 OpenSearchSort(sort0=[$1], dir0=[ASC], fetch=[100], viableBackends=[[mock-parquet]])
                   OpenSearchAggregate(group=[{0}], cnt=[COUNT()], mode=[FINAL], viableBackends=[[mock-parquet]])
                     OpenSearchExchangeReducer(viableBackends=[[mock-parquet]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
-                      OpenSearchSort(sort0=[$0], dir0=[ASC], fetch=[160], viableBackends=[[mock-parquet]], sortExprs=[[$1]])
-                        OpenSearchAggregate(group=[{0}], cnt=[COUNT()], mode=[SHARD_MERGE], viableBackends=[[mock-parquet]])
-                          OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
+                      OpenSearchAggregate(group=[{0}], cnt=[COUNT()], mode=[PARTIAL], viableBackends=[[mock-parquet]])
+                        OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
                 """,
             result
         );
@@ -79,9 +78,8 @@ public class AggregateShardBucketTests extends PlanShapeTestBase {
                 OpenSearchSort(sort0=[$1], dir0=[ASC], fetch=[100], viableBackends=[[mock-parquet]])
                   OpenSearchAggregate(group=[{0}], cnt=[COUNT()], mode=[FINAL], viableBackends=[[mock-parquet]])
                     OpenSearchExchangeReducer(viableBackends=[[mock-parquet]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
-                      OpenSearchSort(sort0=[$0], dir0=[ASC], fetch=[110], viableBackends=[[mock-parquet]], sortExprs=[[$1]])
-                        OpenSearchAggregate(group=[{0}], cnt=[COUNT()], mode=[SHARD_MERGE], viableBackends=[[mock-parquet]])
-                          OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
+                      OpenSearchAggregate(group=[{0}], cnt=[COUNT()], mode=[PARTIAL], viableBackends=[[mock-parquet]])
+                        OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
                 """,
             result
         );
@@ -96,9 +94,8 @@ public class AggregateShardBucketTests extends PlanShapeTestBase {
                 OpenSearchSort(sort0=[$1], dir0=[ASC], fetch=[100], viableBackends=[[mock-parquet]])
                   OpenSearchAggregate(group=[{0}], cnt=[COUNT()], mode=[FINAL], viableBackends=[[mock-parquet]])
                     OpenSearchExchangeReducer(viableBackends=[[mock-parquet]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
-                      OpenSearchSort(sort0=[$0], dir0=[ASC], fetch=[310], viableBackends=[[mock-parquet]], sortExprs=[[$1]])
-                        OpenSearchAggregate(group=[{0}], cnt=[COUNT()], mode=[SHARD_MERGE], viableBackends=[[mock-parquet]])
-                          OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
+                      OpenSearchAggregate(group=[{0}], cnt=[COUNT()], mode=[PARTIAL], viableBackends=[[mock-parquet]])
+                        OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
                 """,
             result
         );
@@ -134,9 +131,8 @@ public class AggregateShardBucketTests extends PlanShapeTestBase {
                 OpenSearchSort(sort0=[$1], dir0=[ASC], viableBackends=[[mock-parquet]])
                   OpenSearchAggregate(group=[{0}], cnt=[COUNT()], mode=[FINAL], viableBackends=[[mock-parquet]])
                     OpenSearchExchangeReducer(viableBackends=[[mock-parquet]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
-                      OpenSearchSort(sort0=[$0], dir0=[ASC], fetch=[25], viableBackends=[[mock-parquet]], sortExprs=[[$1]])
-                        OpenSearchAggregate(group=[{0}], cnt=[COUNT()], mode=[SHARD_MERGE], viableBackends=[[mock-parquet]])
-                          OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
+                      OpenSearchAggregate(group=[{0}], cnt=[COUNT()], mode=[PARTIAL], viableBackends=[[mock-parquet]])
+                        OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
                 """,
             result
         );
@@ -204,9 +200,8 @@ public class AggregateShardBucketTests extends PlanShapeTestBase {
                 OpenSearchSort(sort0=[$1], dir0=[DESC], fetch=[50], viableBackends=[[mock-parquet]])
                   OpenSearchAggregate(group=[{0}], avg_size=[AVG($1)], mode=[FINAL], viableBackends=[[mock-parquet]])
                     OpenSearchExchangeReducer(viableBackends=[[mock-parquet]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
-                      OpenSearchSort(sort0=[$0], dir0=[DESC], fetch=[85], viableBackends=[[mock-parquet]], sortExprs=[[avg_finalize($1)]])
-                        OpenSearchAggregate(group=[{0}], avg_size=[AVG($1)], mode=[SHARD_MERGE], viableBackends=[[mock-parquet]])
-                          OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
+                      OpenSearchAggregate(group=[{0}], avg_size=[AVG($1)], mode=[PARTIAL], viableBackends=[[mock-parquet]])
+                        OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
                 """,
             result
         );
@@ -249,9 +244,8 @@ public class AggregateShardBucketTests extends PlanShapeTestBase {
                 OpenSearchSort(sort0=[$1], dir0=[DESC], fetch=[50], viableBackends=[[mock-parquet]])
                   OpenSearchAggregate(group=[{0}], dc_size=[APPROX_COUNT_DISTINCT($1)], mode=[FINAL], viableBackends=[[mock-parquet]])
                     OpenSearchExchangeReducer(viableBackends=[[mock-parquet]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
-                      OpenSearchSort(sort0=[$0], dir0=[DESC], fetch=[85], viableBackends=[[mock-parquet]], sortExprs=[[hll_estimate($1)]])
-                        OpenSearchAggregate(group=[{0}], dc_size=[APPROX_COUNT_DISTINCT($1)], mode=[SHARD_MERGE], viableBackends=[[mock-parquet]])
-                          OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
+                      OpenSearchAggregate(group=[{0}], dc_size=[APPROX_COUNT_DISTINCT($1)], mode=[PARTIAL], viableBackends=[[mock-parquet]])
+                        OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
                 """,
             result
         );

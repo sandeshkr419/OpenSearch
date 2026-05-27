@@ -13,6 +13,7 @@ import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rel.type.RelDataTypeField;
+import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexNode;
@@ -20,7 +21,9 @@ import org.apache.calcite.sql.SqlAggFunction;
 import org.opensearch.analytics.planner.rel.AggregateMode;
 import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
 import org.opensearch.analytics.planner.rel.OpenSearchProject;
+import org.opensearch.analytics.planner.rel.OpenSearchSort;
 import org.opensearch.analytics.planner.rel.OpenSearchStageInputScan;
+import org.opensearch.analytics.planner.rel.ShardBucketHint;
 import org.opensearch.analytics.spi.AggregateFunction;
 import org.opensearch.analytics.spi.AggregateFunction.IntermediateField;
 
@@ -97,6 +100,46 @@ final class DistributedAggregateRewriter {
                 stageInput.getOutputFieldStorage()
             );
             newFinalInput = exchange.copy(exchange.getTraitSet(), List.of(newStageInput));
+        }
+
+        // Shard-bucket oversampling: insert per-shard Sort+Limit below the ER so each
+        // shard ships at most shardSize groups. The Sort uses a SHARD_MERGE aggregate
+        // that emits state (or scalar for non-engine-native) which the Sort orders by
+        // via finalizeOperator sort expressions.
+        ShardBucketHint hint = finalAgg.getShardBucketHint();
+        if (hint != null) {
+            RelNode erChild = newFinalInput.getInputs().get(0); // StageInputScan (possibly retyped)
+            boolean anyNativeMerge = finalAgg.getAggCallList().stream().anyMatch(c -> {
+                AggregateFunction fn = AggregateFunction.fromSqlAggFunction(c.getAggregation());
+                return fn != null && fn.isEngineNativeMerge();
+            });
+            AggregateMode shardMode = anyNativeMerge ? AggregateMode.SHARD_MERGE : AggregateMode.FINAL;
+            OpenSearchAggregate shardLocalAgg = new OpenSearchAggregate(
+                finalAgg.getCluster(),
+                erChild.getTraitSet(),
+                erChild,
+                finalAgg.getGroupSet(),
+                finalAgg.getGroupSets(),
+                finalAgg.getAggCallList(),
+                shardMode,
+                finalAgg.getViableBackends(),
+                finalAgg.getCallAnnotations()
+            );
+            RexBuilder rexBuilder = finalAgg.getCluster().getRexBuilder();
+            RelDataType intType = tf.createSqlType(org.apache.calcite.sql.type.SqlTypeName.INTEGER);
+            RexNode shardFetch = rexBuilder.makeExactLiteral(java.math.BigDecimal.valueOf(hint.shardSize()), intType);
+            OpenSearchSort shardSort = new OpenSearchSort(
+                shardLocalAgg.getCluster(),
+                shardLocalAgg.getTraitSet(),
+                shardLocalAgg,
+                hint.collation(),
+                null,
+                shardFetch,
+                shardLocalAgg.getViableBackends(),
+                true,
+                hint.sortExprs()
+            );
+            newFinalInput = exchange.copy(exchange.getTraitSet(), List.of(shardSort));
         }
 
         // Re-create captured literal aggregate-args (e.g. TAKE's N) as constant Project

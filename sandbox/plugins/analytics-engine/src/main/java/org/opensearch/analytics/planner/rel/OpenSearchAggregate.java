@@ -255,11 +255,7 @@ public class OpenSearchAggregate extends Aggregate implements OpenSearchRelNode 
 
     @Override
     public RelWriter explainTerms(RelWriter pw) {
-        RelWriter writer = super.explainTerms(pw).item("mode", mode).item("viableBackends", viableBackends);
-        if (shardBucketHint != null) {
-            writer = writer.item("shardBucketHint", shardBucketHint);
-        }
-        return writer;
+        return super.explainTerms(pw).item("mode", mode).item("viableBackends", viableBackends);
     }
 
     @Override
