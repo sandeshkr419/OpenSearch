@@ -23,7 +23,7 @@ import java.util.Map;
  * for the operators reachable from this PR — SPAN over numerics (the wiring added here) plus
  * the broader stats family (AVG, SUM, COUNT, MIN/MAX, DISTINCT_COUNT, STDDEV_POP / SAMP,
  * VAR_POP / SAMP) which already flow through the analytics-engine route via Calcite's
- * {@link org.opensearch.analytics.planner.rules.OpenSearchAggregateReduceRule} decomposition.
+ * state-shipping wrapper.
  * Each test sends a PPL query through {@code POST /_analytics/ppl} (exposed by the
  * {@code test-ppl-frontend} plugin), exercising the same {@code UnifiedQueryPlanner} →
  * {@code CalciteRelNodeVisitor} → Substrait → DataFusion pipeline as the SQL plugin's

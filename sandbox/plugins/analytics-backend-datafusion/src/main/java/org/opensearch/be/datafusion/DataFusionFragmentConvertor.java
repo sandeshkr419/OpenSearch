@@ -29,8 +29,10 @@ import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.schema.ColumnStrategy;
 import org.apache.calcite.sql.SqlAggFunction;
+import org.apache.calcite.sql.SqlFunction;
 import org.apache.calcite.sql.SqlFunctionCategory;
 import org.apache.calcite.sql.SqlKind;
+import org.apache.calcite.sql.SqlOperator;
 import org.apache.calcite.sql.fun.SqlLibraryOperators;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.type.OperandTypes;
@@ -159,6 +161,25 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
      *       {@code rex ... offset_field=name}.</li>
      * </ul>
      */
+
+    /** Per-field accessors for {@code pattern_parser}'s STRUCT output; see {@link ItemTypeRebuilder}. */
+    static final SqlOperator LOCAL_PATTERN_PARSER_GET_PATTERN_OP = new SqlFunction(
+        "pattern_parser_get_pattern",
+        SqlKind.OTHER_FUNCTION,
+        ReturnTypes.VARCHAR_FORCE_NULLABLE,
+        null,
+        OperandTypes.ANY_ANY,
+        SqlFunctionCategory.USER_DEFINED_FUNCTION
+    );
+
+    static final SqlOperator LOCAL_PATTERN_PARSER_GET_TOKENS_OP = new SqlFunction(
+        "pattern_parser_get_tokens",
+        SqlKind.OTHER_FUNCTION,
+        ReturnTypes.ARG0_NULLABLE,
+        null,
+        OperandTypes.ANY_ANY,
+        SqlFunctionCategory.USER_DEFINED_FUNCTION
+    );
     private static final List<FunctionMappings.Sig> ADDITIONAL_SCALAR_SIGS = List.of(
         FunctionMappings.s(DelegatedPredicateFunction.FUNCTION, DelegatedPredicateFunction.NAME),
         FunctionMappings.s(DelegationPossibleFunction.FUNCTION, DelegationPossibleFunction.NAME),
@@ -168,7 +189,6 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         FunctionMappings.s(SqlLibraryOperators.CONCAT_WS, "concat_ws"),
         FunctionMappings.s(SqlLibraryOperators.ILIKE, "ilike"),
         FunctionMappings.s(SqlLibraryOperators.DATE_PART, "date_part"),
-        // Engine-output cast rewrite target — see DatetimeOutputCastRewriter (issue #5420).
         // Routes Calcite's TO_CHAR call to DataFusion's native `to_char` so PPL's
         // documented space-separator timestamp output is preserved on the AE path.
         FunctionMappings.s(SqlLibraryOperators.TO_CHAR, "to_char"),
@@ -279,7 +299,9 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         FunctionMappings.s(WidthBucketAdapter.LOCAL_WIDTH_BUCKET_OP, "width_bucket"),
         FunctionMappings.s(MinspanBucketAdapter.LOCAL_MINSPAN_BUCKET_OP, "minspan_bucket"),
         FunctionMappings.s(RangeBucketAdapter.LOCAL_RANGE_BUCKET_OP, "range_bucket"),
-        FunctionMappings.s(ConvAdapter.LOCAL_CONV_OP, "conv")
+        FunctionMappings.s(ConvAdapter.LOCAL_CONV_OP, "conv"),
+        FunctionMappings.s(LOCAL_PATTERN_PARSER_GET_PATTERN_OP, "pattern_parser_get_pattern"),
+        FunctionMappings.s(LOCAL_PATTERN_PARSER_GET_TOKENS_OP, "pattern_parser_get_tokens")
     );
 
     /**
@@ -304,18 +326,48 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
     static final SqlAggFunction LOCAL_TAKE_OP = localAggOp("take", ReturnTypes.TO_ARRAY, OperandTypes.VARIADIC);
     static final SqlAggFunction LOCAL_FIRST_OP = localAggOp("first_value", ReturnTypes.ARG0, OperandTypes.ANY);
     static final SqlAggFunction LOCAL_LAST_OP = localAggOp("last_value", ReturnTypes.ARG0, OperandTypes.ANY);
-    static final SqlAggFunction LOCAL_SUM_OP = localAggOp("sum", ReturnTypes.ARG0_NULLABLE, OperandTypes.NUMERIC);
-    static final SqlAggFunction LOCAL_MIN_OP = localAggOp("min", ReturnTypes.ARG0_NULLABLE, OperandTypes.ANY);
-    static final SqlAggFunction LOCAL_MAX_OP = localAggOp("max", ReturnTypes.ARG0_NULLABLE, OperandTypes.ANY);
+    static final SqlAggFunction LOCAL_SUM_OP = localAggOp("sum", ReturnTypes.ARG0_FORCE_NULLABLE, OperandTypes.NUMERIC);
+    static final SqlAggFunction LOCAL_MIN_OP = localAggOp("min", ReturnTypes.ARG0_FORCE_NULLABLE, OperandTypes.ANY);
+    static final SqlAggFunction LOCAL_MAX_OP = localAggOp("max", ReturnTypes.ARG0_FORCE_NULLABLE, OperandTypes.ANY);
     static final SqlAggFunction LOCAL_COUNT_OP = localAggOp("count", ReturnTypes.BIGINT, OperandTypes.ANY);
-    static final SqlAggFunction LOCAL_AVG_OP = localAggOp("avg", ReturnTypes.ARG0_NULLABLE, OperandTypes.NUMERIC);
-    static final SqlAggFunction LOCAL_STDDEV_POP_OP = localAggOp("stddev_pop", ReturnTypes.DOUBLE_NULLABLE, OperandTypes.NUMERIC);
-    static final SqlAggFunction LOCAL_STDDEV_SAMP_OP = localAggOp("stddev_samp", ReturnTypes.DOUBLE_NULLABLE, OperandTypes.NUMERIC);
-    static final SqlAggFunction LOCAL_VAR_POP_OP = localAggOp("var_pop", ReturnTypes.DOUBLE_NULLABLE, OperandTypes.NUMERIC);
-    static final SqlAggFunction LOCAL_VAR_SAMP_OP = localAggOp("var_samp", ReturnTypes.DOUBLE_NULLABLE, OperandTypes.NUMERIC);
+    static final SqlAggFunction LOCAL_AVG_OP = localAggOp("avg", ReturnTypes.DOUBLE_FORCE_NULLABLE, OperandTypes.NUMERIC);
+    static final SqlAggFunction LOCAL_STDDEV_POP_OP = localAggOp("stddev_pop", ReturnTypes.DOUBLE_FORCE_NULLABLE, OperandTypes.NUMERIC);
+    static final SqlAggFunction LOCAL_STDDEV_SAMP_OP = localAggOp("stddev_samp", ReturnTypes.DOUBLE_FORCE_NULLABLE, OperandTypes.NUMERIC);
+    static final SqlAggFunction LOCAL_VAR_POP_OP = localAggOp("var_pop", ReturnTypes.DOUBLE_FORCE_NULLABLE, OperandTypes.NUMERIC);
+    static final SqlAggFunction LOCAL_VAR_SAMP_OP = localAggOp("var_samp", ReturnTypes.DOUBLE_FORCE_NULLABLE, OperandTypes.NUMERIC);
     static final SqlAggFunction LOCAL_ARRAY_AGG_OP = localAggOp("array_agg", ReturnTypes.TO_ARRAY, OperandTypes.ANY);
     static final SqlAggFunction LOCAL_LIST_MERGE_OP = localAggOp("list_merge", ReturnTypes.ARG0, OperandTypes.ANY);
     static final SqlAggFunction LOCAL_LIST_MERGE_DISTINCT_OP = localAggOp("list_merge_distinct", ReturnTypes.ARG0, OperandTypes.ANY);
+
+    /** BRAIN window-function stub; return type is VARCHAR (single pattern string per row). */
+    static final SqlAggFunction LOCAL_INTERNAL_PATTERN_WINDOW_OP = new SqlAggFunction(
+        "internal_pattern",
+        null,
+        SqlKind.OTHER_FUNCTION,
+        ReturnTypes.VARCHAR_FORCE_NULLABLE,
+        null,
+        OperandTypes.VARIADIC,
+        SqlFunctionCategory.USER_DEFINED_FUNCTION,
+        false,
+        false,
+        Optionality.FORBIDDEN
+    ) {
+    };
+
+    /** BRAIN aggregate stub; return type is supplied by {@link PplAggregateCallRewriter}. */
+    static final SqlAggFunction LOCAL_INTERNAL_PATTERN_OP = new SqlAggFunction(
+        "internal_pattern",
+        null,
+        SqlKind.OTHER_FUNCTION,
+        ReturnTypes.ARG0,
+        null,
+        OperandTypes.VARIADIC,
+        SqlFunctionCategory.USER_DEFINED_FUNCTION,
+        false,
+        false,
+        Optionality.FORBIDDEN
+    ) {
+    };
 
     /** Isthmus bypass stub: custom SqlAggFunction identity routes through ADDITIONAL_AGGREGATE_SIGS → YAML extensions. */
     private static SqlAggFunction localAggOp(String name, SqlReturnTypeInference returnType, SqlOperandTypeChecker operandTypes) {
@@ -368,7 +420,9 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         FunctionMappings.s(LOCAL_LAST_OP, "last_value"),
         FunctionMappings.s(LOCAL_ARRAY_AGG_OP, "array_agg"),
         FunctionMappings.s(LOCAL_LIST_MERGE_OP, "list_merge"),
-        FunctionMappings.s(LOCAL_LIST_MERGE_DISTINCT_OP, "list_merge_distinct")
+        FunctionMappings.s(LOCAL_LIST_MERGE_DISTINCT_OP, "list_merge_distinct"),
+        FunctionMappings.s(LOCAL_INTERNAL_PATTERN_OP, "internal_pattern"),
+        FunctionMappings.s(LOCAL_INTERNAL_PATTERN_WINDOW_OP, "internal_pattern")
     );
 
     /**
@@ -484,10 +538,7 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         // with "Unable to convert the type NULL". The widening only changes literal type
         // tags; semantics and field names (used by Plan.Root.names) are unchanged.
         RelNode preprocessed = UntypedNullPreprocessor.rewrite(fragment);
-        // Rewrite DatetimeOutputCastRule's CAST(<TIMESTAMP> AS VARCHAR) to to_char(...) so
         // DataFusion emits PPL's space-separator timestamp format instead of Arrow's ISO-T.
-        // See issue #5420.
-        preprocessed = DatetimeOutputCastRewriter.rewrite(preprocessed);
         // Rewrite PPL's state-expanding aggregates (TAKE/FIRST/LAST/LIST/VALUES) onto
         // LOCAL_*_OP stubs so isthmus's AggregateFunctionConverter binds them by
         // operator identity through ADDITIONAL_AGGREGATE_SIGS.
@@ -538,8 +589,6 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         // wrapper conversion is just as susceptible to a SqlTypeName.NULL literal lurking in
         // a CASE call attached on top of an inner plan.
         RelNode preprocessed = UntypedNullPreprocessor.rewrite(operator);
-        // Same rationale as convertToSubstrait — issue #5420.
-        preprocessed = DatetimeOutputCastRewriter.rewrite(preprocessed);
         preprocessed = PplAggregateCallRewriter.rewrite(preprocessed);
         preprocessed = OpenSearchSortExpressionRewriter.rewrite(preprocessed);
         SubstraitRelVisitor visitor = createVisitor(preprocessed);

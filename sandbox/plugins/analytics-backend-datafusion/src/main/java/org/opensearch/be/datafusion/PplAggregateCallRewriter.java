@@ -80,7 +80,7 @@ final class PplAggregateCallRewriter {
         }
         SqlAggFunction targetOp;
         boolean targetDistinct = call.isDistinct();
-        RelDataType explicitReturnType = call.getType();
+        RelDataType explicitType = null;
         switch (aggregation.getName().toUpperCase(java.util.Locale.ROOT)) {
             case "AVG" -> targetOp = DataFusionFragmentConvertor.LOCAL_AVG_OP;
             case "COUNT" -> targetOp = DataFusionFragmentConvertor.LOCAL_COUNT_OP;
@@ -91,9 +91,18 @@ final class PplAggregateCallRewriter {
             case "STDDEV", "STDDEV_SAMP" -> targetOp = DataFusionFragmentConvertor.LOCAL_STDDEV_SAMP_OP;
             case "VAR_POP" -> targetOp = DataFusionFragmentConvertor.LOCAL_VAR_POP_OP;
             case "VAR_SAMP", "VARIANCE" -> targetOp = DataFusionFragmentConvertor.LOCAL_VAR_SAMP_OP;
-            case "TAKE" -> targetOp = DataFusionFragmentConvertor.LOCAL_TAKE_OP;
-            case "FIRST" -> targetOp = DataFusionFragmentConvertor.LOCAL_FIRST_OP;
-            case "LAST" -> targetOp = DataFusionFragmentConvertor.LOCAL_LAST_OP;
+            case "TAKE" -> {
+                targetOp = DataFusionFragmentConvertor.LOCAL_TAKE_OP;
+                explicitType = call.getType();
+            }
+            case "FIRST" -> {
+                targetOp = DataFusionFragmentConvertor.LOCAL_FIRST_OP;
+                explicitType = call.getType();
+            }
+            case "LAST" -> {
+                targetOp = DataFusionFragmentConvertor.LOCAL_LAST_OP;
+                explicitType = call.getType();
+            }
             case "LIST", "VALUES" -> {
                 // arg0 type distinguishes PARTIAL (raw element → array_agg) from FINAL (array → list_merge).
                 if (call.getArgList().isEmpty()) {
@@ -107,17 +116,17 @@ final class PplAggregateCallRewriter {
                         ? DataFusionFragmentConvertor.LOCAL_LIST_MERGE_DISTINCT_OP
                         : DataFusionFragmentConvertor.LOCAL_LIST_MERGE_OP;
                     targetDistinct = false;
-                    explicitReturnType = arg0Type;
+                    explicitType = arg0Type;
                 } else {
                     targetOp = DataFusionFragmentConvertor.LOCAL_ARRAY_AGG_OP;
                     targetDistinct = isValues;
-                    explicitReturnType = agg.getCluster().getTypeFactory().createArrayType(arg0Type, -1);
+                    explicitType = agg.getCluster().getTypeFactory().createArrayType(arg0Type, -1);
                 }
             }
             case "PATTERN" -> {
                 // PPL declares ARRAY<MAP<VARCHAR, ANY>>; substrait can't carry ANY.
                 targetOp = DataFusionFragmentConvertor.LOCAL_INTERNAL_PATTERN_OP;
-                explicitReturnType = internalPatternReturnType(agg.getCluster().getTypeFactory());
+                explicitType = internalPatternReturnType(agg.getCluster().getTypeFactory());
             }
             default -> {
                 return call;
@@ -135,7 +144,7 @@ final class PplAggregateCallRewriter {
             call.collation,
             agg.getGroupCount(),
             agg.getInput(),
-            explicitReturnType,
+            explicitType,
             call.getName()
         );
     }

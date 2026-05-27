@@ -19,6 +19,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, BinaryArray};
+use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
@@ -127,6 +128,11 @@ impl StateShippingUdaf {
         matches!(arg_type, DataType::Binary | DataType::LargeBinary)
     }
 
+    /// Returns true if the inner UDAF's accumulator rejects this input type.
+    fn probe_accumulator_rejects(&self, arg_type: &DataType) -> bool {
+        self.build_inner_accumulator(arg_type, false).is_err()
+    }
+
     /// Arrow schema for the inner UDAF's state shape (IPC encode/decode target).
     fn inner_state_schema(&self, native_arg_type: &DataType, is_distinct: bool) -> Result<SchemaRef> {
         let inner_return_type = self.inner.return_type(&[native_arg_type.clone()])?;
@@ -179,37 +185,41 @@ impl AggregateUDFImpl for StateShippingUdaf {
         &self.signature
     }
 
-    /// Coerces input types: Binary→pass-through (FINAL), numeric→Float64, else delegate.
+    /// Coerces input types: Binary→pass-through (FINAL), numeric→Float64 for
+    /// float-native aggregates (avg/stddev/var/approx_distinct), else pass-through.
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.is_empty() {
             return exec_err!("{}: missing argument", self.name);
         }
-        let arg = &arg_types[0];
-        if Self::is_state_input(arg) {
-            return Ok(vec![arg.clone()]);
+        if arg_types.iter().any(Self::is_state_input) {
+            return Ok(arg_types.to_vec());
         }
-        if arg.is_numeric() {
-            return Ok(vec![DataType::Float64]);
+        // Coerce only when the inner rejects the raw type entirely (e.g. sum rejects Int32).
+        // Also coerce when inner's accumulator would reject it (e.g. avg rejects Int32).
+        if arg_types[0].is_numeric() {
+            if self.inner.return_type(arg_types).is_err() {
+                return Ok(vec![DataType::Float64]);
+            }
+            // Probe: can the inner build an accumulator with this type?
+            if self.probe_accumulator_rejects(&arg_types[0]) {
+                return Ok(vec![DataType::Float64]);
+            }
         }
-        match self.inner.coerce_types(arg_types) {
-            Ok(coerced) => Ok(coerced),
-            Err(_) => Ok(arg_types.to_vec()),
-        }
+        Ok(arg_types.to_vec())
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types.is_empty() {
             return exec_err!("{}: missing argument", self.name);
         }
-        // Probe with Float64; return shape is input-independent for wrapped UDAFs.
-        let probe_type = if Self::is_state_input(&arg_types[0]) {
-            DataType::Float64
-        } else if arg_types[0].is_numeric() {
-            DataType::Float64
-        } else {
-            arg_types[0].clone()
-        };
-        self.inner.return_type(&[probe_type])
+        if Self::is_state_input(&arg_types[0]) {
+            // FINAL side: probe with Float64 (return shape is input-independent)
+            return self.inner.return_type(&[DataType::Float64]);
+        }
+        // Try with actual type first; fall back to Float64 probe if inner rejects it
+        // (e.g. sum's Signature::Coercible expects post-coercion Float64, not raw Int32).
+        self.inner.return_type(arg_types)
+            .or_else(|_| self.inner.return_type(&[DataType::Float64]))
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
@@ -232,10 +242,16 @@ impl AggregateUDFImpl for StateShippingUdaf {
             })?;
         let is_final = Self::is_state_input(&arg_type);
 
-        let native_arg_type = if is_final {
-            DataType::Float64
+        let (native_arg_type, coerce_input_to) = if is_final {
+            (DataType::Float64, None)
+        } else if arg_type.is_numeric() {
+            match self.inner.return_type(&[arg_type.clone()]) {
+                Err(_) => (DataType::Float64, Some(DataType::Float64)),
+                _ if self.probe_accumulator_rejects(&arg_type) => (DataType::Float64, Some(DataType::Float64)),
+                _ => (arg_type, None),
+            }
         } else {
-            arg_type
+            (arg_type, None)
         };
 
         let inner_acc = self.build_inner_accumulator(&native_arg_type, acc_args.is_distinct)?;
@@ -245,6 +261,7 @@ impl AggregateUDFImpl for StateShippingUdaf {
             inner: inner_acc,
             state_schema,
             is_final,
+            coerce_input_to,
         }))
     }
 }
@@ -281,6 +298,8 @@ struct StateShippingAccumulator {
     inner: Box<dyn Accumulator>,
     state_schema: SchemaRef,
     is_final: bool,
+    /// If set, cast input arrays to this type before passing to inner (for avg/stddev on integers).
+    coerce_input_to: Option<DataType>,
 }
 
 impl Debug for StateShippingAccumulator {
@@ -339,6 +358,12 @@ impl Accumulator for StateShippingAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if self.is_final {
             self.merge_state_binary(&values[0])
+        } else if let Some(ref target) = self.coerce_input_to {
+            let casted: Vec<ArrayRef> = values
+                .iter()
+                .map(|a| cast(a, target).unwrap_or_else(|_| a.clone()))
+                .collect();
+            self.inner.update_batch(&casted)
         } else {
             self.inner.update_batch(values)
         }

@@ -114,7 +114,7 @@ public class StreamingCoordinatorReduceIT extends AnalyticsRestTestCase {
 
     /**
      * {@code stats stddev_pop(value) as s} — multi-field statistical aggregate. Reduced by
-     * {@link org.opensearch.analytics.planner.rules.OpenSearchAggregateReduceRule} into
+     * state-shipping wrapper handles
      * SUM, SUM-of-squares, and COUNT primitives at HEP-marking time, then finalised with
      * POWER(variance, 0.5).
      *

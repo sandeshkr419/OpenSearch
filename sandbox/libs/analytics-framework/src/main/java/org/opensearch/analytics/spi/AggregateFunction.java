@@ -75,6 +75,7 @@ public enum AggregateFunction {
     // State-expanding — state grows with input rows per key.
     PERCENTILE_CONT(Type.STATE_EXPANDING, SqlKind.PERCENTILE_CONT),
     PERCENTILE_DISC(Type.STATE_EXPANDING, SqlKind.PERCENTILE_DISC),
+    PERCENTILE_APPROX(Type.STATE_EXPANDING, SqlKind.OTHER),
     COLLECT(Type.STATE_EXPANDING, SqlKind.COLLECT),
     LISTAGG(Type.STATE_EXPANDING, SqlKind.LISTAGG),
 

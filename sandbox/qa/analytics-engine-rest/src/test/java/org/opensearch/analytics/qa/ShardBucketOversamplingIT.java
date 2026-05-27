@@ -173,7 +173,7 @@ public class ShardBucketOversamplingIT extends AnalyticsRestTestCase {
         List<String> columns = (List<String>) result.get("columns");
         int avgIdx = columns.indexOf("avg_v");
         double actualAvg = ((Number) rows.get(0).get(avgIdx)).doubleValue();
-        System.out.println("AVG SKEWED: actual=" + actualAvg + " (true mean = 20.8)");
+        logger.info("AVG SKEWED: actual={} (true mean = 20.8)", actualAvg);
         assertEquals("AVG of [1,1,1,1,100] must be 20.8 (true mean)", 20.8, actualAvg, 0.5);
     }
 

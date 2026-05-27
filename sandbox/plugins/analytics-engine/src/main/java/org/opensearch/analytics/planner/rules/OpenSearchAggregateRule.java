@@ -14,6 +14,8 @@ import org.apache.calcite.plan.RelTraitSet;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Aggregate;
 import org.apache.calcite.rel.core.AggregateCall;
+import org.apache.calcite.sql.SqlAggFunction;
+import org.apache.calcite.sql.SqlKind;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.analytics.planner.CapabilityRegistry;
@@ -109,6 +111,41 @@ public class OpenSearchAggregateRule extends RelOptRule {
 
         RelTraitSet aggregateTraits = child.getTraitSet();
 
+        // Pin return types with fixed-inference wrapper so Calcite's Aggregate constructor
+        // assertion passes. The sql-plugin frontend may declare return types (e.g. AVG→DOUBLE)
+        // that differ from our Calcite fork's type inference (AVG(INTEGER)→INTEGER).
+        List<AggregateCall> fixedCalls = new java.util.ArrayList<>(aggCalls.size());
+        for (AggregateCall c : aggCalls) {
+            SqlAggFunction fixed = new SqlAggFunction(
+                c.getAggregation().getName(),
+                null,
+                SqlKind.OTHER_FUNCTION,
+                opBinding -> c.getType(),
+                null,
+                org.apache.calcite.sql.type.OperandTypes.ANY,
+                org.apache.calcite.sql.SqlFunctionCategory.USER_DEFINED_FUNCTION,
+                false,
+                false,
+                org.apache.calcite.util.Optionality.FORBIDDEN
+            ) {
+            };
+            fixedCalls.add(
+                AggregateCall.create(
+                    fixed,
+                    c.isDistinct(),
+                    c.isApproximate(),
+                    c.ignoreNulls(),
+                    c.rexList,
+                    c.getArgList(),
+                    c.filterArg,
+                    c.distinctKeys,
+                    c.collation,
+                    c.getType(),
+                    c.getName()
+                )
+            );
+        }
+
         call.transformTo(
             new OpenSearchAggregate(
                 aggregate.getCluster(),
@@ -116,7 +153,7 @@ public class OpenSearchAggregateRule extends RelOptRule {
                 RelNodeUtils.unwrapHep(aggregate.getInput()),
                 aggregate.getGroupSet(),
                 aggregate.getGroupSets(),
-                aggCalls,
+                fixedCalls,
                 AggregateMode.SINGLE,
                 viableBackends,
                 callAnnotations

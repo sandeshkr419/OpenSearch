@@ -114,6 +114,27 @@ aggregate_functions:
             name: "input"
         nullability: DECLARED_OUTPUT
         return: any1
+  - name: first_value
+    description: PPL `first(field)` — DataFusion native first_value.
+    impls:
+      - args:
+          - name: x
+            value: any
+        return: any
+  - name: last_value
+    description: PPL `last(field)` — DataFusion native last_value.
+    impls:
+      - args:
+          - name: x
+            value: any
+        return: any
+  - name: array_agg
+    description: PPL `list(field)` / `values(field)` — DataFusion native array_agg.
+    impls:
+      - args:
+          - name: x
+            value: any
+        return: any
   - name: internal_pattern
     description: >-
       PPL `patterns ... method=BRAIN` (aggregation mode). Custom Rust UDAF in

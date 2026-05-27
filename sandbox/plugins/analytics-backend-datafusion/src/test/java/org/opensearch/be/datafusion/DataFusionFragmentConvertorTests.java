@@ -305,7 +305,14 @@ public class DataFusionFragmentConvertorTests extends OpenSearchTestCase {
         // Inner: final-agg over stage-input.
         RelDataType stageRowType = rowType("A");
         int childStageId = 7;
-        RelNode stageInput = new OpenSearchStageInputScan(cluster, cluster.traitSet(), childStageId, stageRowType, List.of("datafusion"));
+        RelNode stageInput = new OpenSearchStageInputScan(
+            cluster,
+            cluster.traitSet(),
+            childStageId,
+            stageRowType,
+            List.of("datafusion"),
+            List.of()
+        );
         LogicalAggregate finalAgg = buildSumAggregate(stageInput, 0);
         byte[] innerBytes = convertor.convertFragment(finalAgg);
 

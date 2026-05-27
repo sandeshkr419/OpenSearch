@@ -17,6 +17,8 @@ import org.apache.calcite.rel.core.Project;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexNode;
+import org.apache.calcite.sql.SqlAggFunction;
+import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.type.SqlTypeFamily;
 import org.apache.calcite.util.ImmutableBitSet;
 import org.opensearch.analytics.planner.PlannerContext;
@@ -93,6 +95,13 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
     private static boolean shouldSkipPartialFinalSplit(OpenSearchAggregate aggregate) {
         for (AggregateCall aggCall : aggregate.getAggCallList()) {
             if (isPercentileApprox(aggCall)) {
+                return true;
+            }
+            // State-expanding aggregates (first/last/take/list/values) are not wrapped
+            // by state-shipping and cannot be split into PARTIAL/FINAL.
+            String name = aggCall.getAggregation().getName().toUpperCase(java.util.Locale.ROOT);
+            if ("FIRST".equals(name) || "LAST".equals(name) || "TAKE".equals(name)
+                || "LIST".equals(name) || "VALUES".equals(name)) {
                 return true;
             }
         }
@@ -180,6 +189,40 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
         );
 
         // Shard-bucket hint: pass through to FINAL; DistributedAggregateRewriter consumes it.
+        // Pin return types with fixed-return SqlAggFunction so Calcite's Aggregate constructor
+        // assertion (typeMatchesInferred) passes regardless of how the input schema evolves
+        // after DistributedAggregateRewriter overrides exchange types to Binary.
+        List<AggregateCall> finalCalls = new java.util.ArrayList<>(aggregate.getAggCallList().size());
+        for (AggregateCall c : aggregate.getAggCallList()) {
+            SqlAggFunction fixed = new SqlAggFunction(
+                c.getAggregation().getName(),
+                null,
+                SqlKind.OTHER_FUNCTION,
+                opBinding -> c.getType(),
+                null,
+                org.apache.calcite.sql.type.OperandTypes.ANY,
+                org.apache.calcite.sql.SqlFunctionCategory.USER_DEFINED_FUNCTION,
+                false,
+                false,
+                org.apache.calcite.util.Optionality.FORBIDDEN
+            ) {
+            };
+            finalCalls.add(
+                AggregateCall.create(
+                    fixed,
+                    c.isDistinct(),
+                    c.isApproximate(),
+                    c.ignoreNulls(),
+                    c.rexList,
+                    c.getArgList(),
+                    c.filterArg,
+                    c.distinctKeys,
+                    c.collation,
+                    c.getType(),
+                    c.getName()
+                )
+            );
+        }
 
         RelTraitSet finalTraits = partial.getTraitSet().replace(context.getDistributionTraitDef().coordSingleton());
         RelNode gathered = convert(partial, finalTraits);
@@ -191,7 +234,7 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
             gathered,
             aggregate.getGroupSet(),
             aggregate.getGroupSets(),
-            aggregate.getAggCallList(),
+            finalCalls,
             AggregateMode.FINAL,
             aggregate.getViableBackends(),
             aggregate.getCallAnnotations(),

@@ -18,6 +18,7 @@ import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.sql.SqlAggFunction;
+import org.apache.calcite.sql.SqlKind;
 import org.opensearch.analytics.planner.rel.AggregateMode;
 import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
 import org.opensearch.analytics.planner.rel.OpenSearchProject;
@@ -114,13 +115,33 @@ final class DistributedAggregateRewriter {
                 return fn != null && fn.isEngineNativeMerge();
             });
             AggregateMode shardMode = anyNativeMerge ? AggregateMode.SHARD_MERGE : AggregateMode.FINAL;
+            // Pin return types with fixed-return SqlAggFunction to satisfy Calcite's
+            // typeMatchesInferred assertion (input is Binary state, not the original type).
+            List<AggregateCall> shardCalls = finalAgg.getAggCallList()
+                .stream()
+                .map(
+                    c -> AggregateCall.create(
+                        fixedReturnAggOp(c.getAggregation(), c.getType()),
+                        c.isDistinct(),
+                        c.isApproximate(),
+                        c.ignoreNulls(),
+                        c.rexList,
+                        c.getArgList(),
+                        c.filterArg,
+                        c.distinctKeys,
+                        c.collation,
+                        c.getType(),
+                        c.getName()
+                    )
+                )
+                .toList();
             OpenSearchAggregate shardLocalAgg = new OpenSearchAggregate(
                 finalAgg.getCluster(),
                 erChild.getTraitSet(),
                 erChild,
                 finalAgg.getGroupSet(),
                 finalAgg.getGroupSets(),
-                finalAgg.getAggCallList(),
+                shardCalls,
                 shardMode,
                 finalAgg.getViableBackends(),
                 finalAgg.getCallAnnotations()
@@ -224,15 +245,14 @@ final class DistributedAggregateRewriter {
             aggFunc = call.getAggregation();
             explicitType = null;
         } else if (field.reducer() == AggregateFunction.fromSqlAggFunction(call.getAggregation())) {
-            // Engine-native merge: keep function identity, pin return type. STATE_EXPANDING
-            // pins to the StageInputScan column (PARTIAL's output shape); APPROXIMATE keeps
-            // the user-facing return type (e.g. HLL FINAL → BIGINT).
-            aggFunc = call.getAggregation();
+            // Engine-native merge: use fixedReturnAggOp so Calcite's assertion passes.
             AggregateFunction enumFn = AggregateFunction.fromSqlAggFunction(call.getAggregation());
             if (enumFn.getType() == AggregateFunction.Type.STATE_EXPANDING) {
+                aggFunc = call.getAggregation();
                 explicitType = newFinalInput.getRowType().getFieldList().get(finalArgIdx).getType();
             } else {
                 explicitType = call.getType();
+                aggFunc = fixedReturnAggOp(call.getAggregation(), explicitType);
             }
         } else {
             aggFunc = field.reducer().toSqlAggFunction();
@@ -259,5 +279,22 @@ final class DistributedAggregateRewriter {
             explicitType,
             name
         );
+    }
+
+    /** Returns a SqlAggFunction whose return-type inference always returns fixedType. */
+    private static SqlAggFunction fixedReturnAggOp(SqlAggFunction original, RelDataType fixedType) {
+        return new SqlAggFunction(
+            original.getName(),
+            null,
+            SqlKind.OTHER_FUNCTION,
+            opBinding -> fixedType,
+            null,
+            org.apache.calcite.sql.type.OperandTypes.ANY,
+            org.apache.calcite.sql.SqlFunctionCategory.USER_DEFINED_FUNCTION,
+            false,
+            false,
+            org.apache.calcite.util.Optionality.FORBIDDEN
+        ) {
+        };
     }
 }

@@ -133,7 +133,15 @@ public class OpenSearchTableScan extends TableScan implements OpenSearchRelNode 
 
     @Override
     public RelNode copy(RelTraitSet traitSet, List<RelNode> inputs) {
-        return new OpenSearchTableScan(getCluster(), traitSet, getTable(), viableBackends, outputFieldStorage, overrideRowType, shardBucketFactor);
+        return new OpenSearchTableScan(
+            getCluster(),
+            traitSet,
+            getTable(),
+            viableBackends,
+            outputFieldStorage,
+            overrideRowType,
+            shardBucketFactor
+        );
     }
 
     @Override
@@ -148,7 +156,15 @@ public class OpenSearchTableScan extends TableScan implements OpenSearchRelNode 
 
     @Override
     public RelNode copyResolved(String backend, List<RelNode> children, List<OperatorAnnotation> resolvedAnnotations) {
-        return new OpenSearchTableScan(getCluster(), getTraitSet(), getTable(), List.of(backend), outputFieldStorage, overrideRowType, shardBucketFactor);
+        return new OpenSearchTableScan(
+            getCluster(),
+            getTraitSet(),
+            getTable(),
+            List.of(backend),
+            outputFieldStorage,
+            overrideRowType,
+            shardBucketFactor
+        );
     }
 
     @Override
