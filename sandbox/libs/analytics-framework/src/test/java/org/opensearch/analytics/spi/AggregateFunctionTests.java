@@ -50,24 +50,22 @@ public class AggregateFunctionTests extends OpenSearchTestCase {
     }
 
     // ── Pass-through: SUM / MIN / MAX ──
-
-    public void testSumHasNoDecomposition() {
-        assertFalse(SUM.hasDecomposition());
-        assertNull(SUM.intermediateFields());
+    public void testSumHasDecomposition() {
+        assertTrue(SUM.hasDecomposition());
+        assertTrue(SUM.isEngineNativeMerge());
     }
-
-    // ── COUNT: function-swap (single field, reducer != self) ──
+    // ── COUNT: engine-native merge (Binary state, self-reducer) ──
 
     public void testCountHasDecomposition() {
         assertTrue(COUNT.hasDecomposition());
+        assertTrue(COUNT.isEngineNativeMerge());
     }
 
     public void testCountIntermediateFields() {
         List<AggregateFunction.IntermediateField> fields = COUNT.intermediateFields();
         assertEquals(1, fields.size());
-        assertEquals("count", fields.get(0).name());
-        assertSame(SUM, fields.get(0).reducer());
-        assertEquals(SqlTypeName.BIGINT, resolve(fields.get(0), integer).getSqlTypeName());
+        assertEquals("count_state", fields.get(0).name());
+        assertSame(COUNT, fields.get(0).reducer());
     }
 
     // ── AVG / STDDEV / VAR: state-shipping (single Binary intermediate, reducer == self) ──

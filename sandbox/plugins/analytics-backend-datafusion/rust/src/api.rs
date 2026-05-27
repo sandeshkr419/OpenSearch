@@ -1165,21 +1165,12 @@ fn derive_schema_from_partial_plan(
     let is_partial_phase = crate::udaf::state_shipping::substrait_has_partial_phase(&plan);
     let logical_plan = futures::executor::block_on(from_substrait_plan(&session_state, &plan))?;
     let physical_plan = futures::executor::block_on(session_state.create_physical_plan(&logical_plan))?;
-    let has_wrapper = crate::udaf::state_shipping::plan_contains_state_shipping(&physical_plan);
-    // When the fragment is a state-shipping partial aggregate, we need to report
-    // Binary state schema. Find the first AggregateExec with our wrapper and
-    // return its Partial-mode schema directly (state_fields shape). For all other
-    // plans return the physical plan's schema as-is.
-    let schema = if is_partial_phase && has_wrapper {
-        // The Partial's state_fields use fully-qualified names from DataFusion's
-        // internal naming (e.g. "avg(table.col)"). But the FINAL fragment's substrait
-        // ReadRel uses the user-facing alias (e.g. "avg_v"). To match, take TYPES
-        // from the Partial state_fields and NAMES from the physical plan's Final output
-        // (which matches what isthmus declared).
+    // For partial fragments, report Binary state schema with user-alias field names.
+    let schema = if is_partial_phase {
         let final_schema = physical_plan.schema();
-        match find_partial_wrapper_schema(&physical_plan) {
+        match find_partial_schema(&physical_plan) {
             Some(partial_schema) => {
-                // Merge: final names + partial types
+                // Merge: final names + partial types (Binary)
                 let fields: Vec<datafusion::arrow::datatypes::Field> = final_schema
                     .fields()
                     .iter()
@@ -1202,23 +1193,18 @@ fn derive_schema_from_partial_plan(
     Ok(crate::schema_coerce::coerce_inferred_schema(schema))
 }
 
-/// Walk the plan tree looking for the first AggregateExec(Partial) that contains a
-/// StateShippingUdaf. Return its output schema (which is state_fields-shaped: Binary).
-fn find_partial_wrapper_schema(
+/// Find the first AggregateExec(Partial) and return its output schema.
+fn find_partial_schema(
     plan: &Arc<dyn datafusion::physical_plan::ExecutionPlan>,
 ) -> Option<datafusion::arrow::datatypes::SchemaRef> {
     use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
     if let Some(agg) = plan.as_any().downcast_ref::<AggregateExec>() {
         if *agg.mode() == AggregateMode::Partial {
-            for expr in agg.aggr_expr() {
-                if expr.fun().inner().as_any().downcast_ref::<crate::udaf::state_shipping::StateShippingUdaf>().is_some() {
-                    return Some(plan.schema());
-                }
-            }
+            return Some(plan.schema());
         }
     }
     for child in plan.children() {
-        if let Some(s) = find_partial_wrapper_schema(child) {
+        if let Some(s) = find_partial_schema(child) {
             return Some(s);
         }
     }

@@ -210,16 +210,11 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
     }
 
     /**
-     * If {@code aggregate} carries a {@link ShardBucketHint}, replaces {@code partial} with a
-     * shard-local merge aggregate plus a {@code perPartition} {@link OpenSearchSort}.
+     * Inserts shard-local Sort+Limit when a {@link ShardBucketHint} is present.
      *
-     * <p>Mode is FINAL for additive aggregates (SUM/MIN/MAX/COUNT/AVG/...): shard emits per-group
-     * scalars, coord FINAL re-aggregates. Mode is SHARD_MERGE when any aggCall is engine-native
-     * merge (e.g. APPROX_COUNT_DISTINCT): shard emits intermediate state (Binary HLL sketch),
-     * coord runs state-merge via {@link org.opensearch.analytics.planner.dag.DistributedAggregateRewriter};
-     * the Sort sortExprs use {@link AggregateFunction#finalizeOperator} (e.g. {@code hll_estimate(state)}).
-     *
-     * <p>Returns {@code partial} unchanged when no hint is present.
+     * <p>Lives in the split rule (not the DAG rewriter) because this is the last pipeline
+     * stage where both sides of the exchange boundary are in the same plan tree. After
+     * CBO, the DAG builder splits into separate fragments; the rewriter only sees FINAL.
      */
     private static RelNode maybeInsertShardSort(
         OpenSearchAggregate aggregate,
@@ -263,17 +258,15 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
     /** True when any aggCall is engine-native merge (intermediate state shape != final scalar shape, e.g. HLL Binary sketch for {@code APPROX_COUNT_DISTINCT}). */
     private static boolean hasEngineNativeMergeAggCall(List<AggregateCall> aggCalls) {
         for (AggregateCall call : aggCalls) {
-            if (isEngineNativeMerge(call)) return true;
+            AggregateFunction fn = AggregateFunction.fromSqlAggFunction(call.getAggregation());
+            if (fn != null && fn.isEngineNativeMerge()) return true;
         }
         return false;
     }
 
     private static boolean isEngineNativeMerge(AggregateCall call) {
         AggregateFunction fn = AggregateFunction.fromSqlAggFunction(call.getAggregation());
-        if (fn == null) return false;
-        List<AggregateFunction.IntermediateField> fields = fn.intermediateFields();
-        if (fields == null || fields.size() != 1) return false;
-        return fields.get(0).reducer() == fn;
+        return fn != null && fn.isEngineNativeMerge();
     }
 
     /**

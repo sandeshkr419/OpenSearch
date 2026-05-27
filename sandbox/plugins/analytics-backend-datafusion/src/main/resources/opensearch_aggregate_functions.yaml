@@ -9,6 +9,30 @@ aggregate_functions:
             name: "input"
         nullability: DECLARED_OUTPUT
         return: any1
+  - name: sum
+    description: "Sum. State shipped as IPC-encoded Binary."
+    impls:
+      - args:
+          - value: any1
+            name: "input"
+        nullability: DECLARED_OUTPUT
+        return: any1
+  - name: min
+    description: "Min. State shipped as IPC-encoded Binary."
+    impls:
+      - args:
+          - value: any1
+            name: "input"
+        nullability: DECLARED_OUTPUT
+        return: any1
+  - name: max
+    description: "Max. State shipped as IPC-encoded Binary."
+    impls:
+      - args:
+          - value: any1
+            name: "input"
+        nullability: DECLARED_OUTPUT
+        return: any1
   - name: stddev_pop
     description: "Population standard deviation. State shipped as IPC-encoded Binary."
     impls:

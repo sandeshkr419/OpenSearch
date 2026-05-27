@@ -49,24 +49,17 @@ pub(crate) fn apply_aggregate_mode(
 }
 
 /// Conditionally strips the auto-inserted Final aggregate and applies schema coercion.
-/// Strips when the substrait declares partial phase AND the plan contains a state-shipping
-/// wrapper with non-Binary input. When stripped, skips relabel (stale schema from Sort).
+/// Strips when the substrait declares INITIAL_TO_INTERMEDIATE phase (partial fragment).
+/// When stripped, skips relabel (Sort schema may be stale after child type change).
 pub(crate) fn maybe_strip_for_partial(
     plan: Arc<dyn ExecutionPlan>,
     is_partial_phase: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let needs_strip = is_partial_phase
-        && crate::udaf::state_shipping::plan_contains_state_shipping(&plan);
-    let plan = if needs_strip {
-        apply_aggregate_mode(plan, Mode::Partial)?
+    if is_partial_phase {
+        apply_aggregate_mode(plan, Mode::Partial)
     } else {
-        plan
-    };
-    if !needs_strip {
         let target = crate::schema_coerce::coerce_inferred_schema(plan.schema());
         crate::relabel_exec::wrap_if_relabel_needed(plan, target)
-    } else {
-        Ok(plan)
     }
 }
 

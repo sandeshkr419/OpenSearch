@@ -26,9 +26,9 @@ import org.apache.calcite.rex.RexShuttle;
 import org.opensearch.analytics.planner.RelNodeUtils;
 import org.opensearch.analytics.planner.rel.AggregateMode;
 import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
+import org.opensearch.analytics.planner.rel.OpenSearchDistribution;
 import org.opensearch.analytics.planner.rel.OpenSearchSort;
 import org.opensearch.analytics.planner.rel.OpenSearchTableScan;
-import org.opensearch.analytics.planner.rel.OpenSearchDistribution;
 import org.opensearch.analytics.planner.rel.ShardBucketHint;
 import org.opensearch.analytics.spi.AggregateFunction;
 
@@ -216,14 +216,14 @@ public class OpenSearchAggregateShardBucketRule extends RelOptRule {
             anyTable[0] = true;
             for (int i = 0; i < scan.getTraitSet().size(); i++) {
                 if (scan.getTraitSet().getTrait(i) instanceof OpenSearchDistribution dist
-                        && dist.getShardCount() != null && dist.getShardCount() > 1) {
+                    && dist.getShardCount() != null
+                    && dist.getShardCount() > 1) {
                     anyMultiShard[0] = true;
                 }
             }
         });
         return anyTable[0] && !anyMultiShard[0];
     }
-
 
     /** {@link Project} immediately below {@code sort}, or {@code null}. */
     private static Project projectBelow(OpenSearchSort sort) {

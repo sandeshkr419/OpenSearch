@@ -35,41 +35,23 @@ pub fn register_all(ctx: &SessionContext) {
     use datafusion::functions_aggregate::approx_distinct::approx_distinct_udaf;
     use datafusion::functions_aggregate::average::avg_udaf;
     use datafusion::functions_aggregate::count::count_udaf;
+    use datafusion::functions_aggregate::min_max::{max_udaf, min_udaf};
     use datafusion::functions_aggregate::stddev::{stddev_pop_udaf, stddev_udaf};
+    use datafusion::functions_aggregate::sum::sum_udaf;
     use datafusion::functions_aggregate::variance::{var_pop_udaf, var_samp_udaf};
 
-    ctx.register_udaf(AggregateUDF::from(StateShippingUdaf::new(avg_udaf())));
+    ctx.register_udaf(AggregateUDF::from(StateShippingUdaf::new(sum_udaf())));
+    ctx.register_udaf(AggregateUDF::from(StateShippingUdaf::new(min_udaf())));
+    ctx.register_udaf(AggregateUDF::from(StateShippingUdaf::new(max_udaf())));
     ctx.register_udaf(AggregateUDF::from(StateShippingUdaf::new(count_udaf())));
+    ctx.register_udaf(AggregateUDF::from(StateShippingUdaf::new(avg_udaf())));
     ctx.register_udaf(AggregateUDF::from(StateShippingUdaf::new(approx_distinct_udaf())));
     ctx.register_udaf(AggregateUDF::from(StateShippingUdaf::new(stddev_pop_udaf())));
-    // Register stddev under alias "stddev_samp" for substrait resolution.
     ctx.register_udaf(AggregateUDF::from(StateShippingUdaf::new(stddev_udaf())));
     ctx.register_udaf(AggregateUDF::from(StateShippingUdaf::with_name(stddev_udaf(), "stddev_samp".to_string())));
     ctx.register_udaf(AggregateUDF::from(StateShippingUdaf::new(var_pop_udaf())));
     ctx.register_udaf(AggregateUDF::from(StateShippingUdaf::new(var_samp_udaf())));
     ctx.register_udaf(AggregateUDF::from(StateShippingUdaf::with_name(var_samp_udaf(), "var_samp".to_string())));
-}
-
-/// True when plan has a state-shipping wrapper with non-Binary input (data-node side).
-pub fn plan_contains_state_shipping(plan: &Arc<dyn datafusion::physical_plan::ExecutionPlan>) -> bool {
-    use datafusion::physical_plan::aggregates::AggregateExec;
-    if let Some(agg) = plan.as_any().downcast_ref::<AggregateExec>() {
-        let input_schema = agg.input().schema();
-        for expr in agg.aggr_expr() {
-            if expr.fun().inner().as_any().downcast_ref::<StateShippingUdaf>().is_some() {
-                let any_binary = expr.expressions().iter().any(|e| {
-                    matches!(
-                        e.data_type(input_schema.as_ref()),
-                        Ok(datafusion::arrow::datatypes::DataType::Binary)
-                    )
-                });
-                if !any_binary {
-                    return true;
-                }
-            }
-        }
-    }
-    plan.children().iter().any(|c| plan_contains_state_shipping(c))
 }
 
 /// True when substrait declares INITIAL_TO_INTERMEDIATE phase on any aggregate measure.

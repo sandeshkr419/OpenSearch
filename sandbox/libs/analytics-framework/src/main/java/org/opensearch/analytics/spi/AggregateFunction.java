@@ -34,23 +34,43 @@ import java.util.Optional;
  */
 public enum AggregateFunction {
     // Simple — fixed-size state per key
-    SUM(Type.SIMPLE, SqlKind.SUM),
-    SUM0(Type.SIMPLE, SqlKind.SUM0),
-    MIN(Type.SIMPLE, SqlKind.MIN),
-    MAX(Type.SIMPLE, SqlKind.MAX),
+    SUM(Type.SIMPLE, SqlKind.SUM, fields(IF("sum_state", new ArrowType.Binary(), null))),
+    SUM0(Type.SIMPLE, SqlKind.SUM0, fields(IF("sum0_state", new ArrowType.Binary(), null))),
+    MIN(Type.SIMPLE, SqlKind.MIN, fields(IF("min_state", new ArrowType.Binary(), null))),
+    MAX(Type.SIMPLE, SqlKind.MAX, fields(IF("max_state", new ArrowType.Binary(), null))),
     COUNT(Type.SIMPLE, SqlKind.COUNT, fields(IF("count_state", new ArrowType.Binary(), null))),
     // State-shipping: intermediate state encoded as Binary on the wire via StateShippingUdaf.
-    AVG(Type.SIMPLE, SqlKind.AVG, fields(IF("avg_state", new ArrowType.Binary(), null)),
-        finalizeOp("avg_finalize", ReturnTypes.DOUBLE_NULLABLE)),
+    AVG(
+        Type.SIMPLE,
+        SqlKind.AVG,
+        fields(IF("avg_state", new ArrowType.Binary(), null)),
+        finalizeOp("avg_finalize", ReturnTypes.DOUBLE_NULLABLE)
+    ),
 
-    STDDEV_POP(Type.STATISTICAL, SqlKind.STDDEV_POP, fields(IF("stddev_pop_state", new ArrowType.Binary(), null)),
-        finalizeOp("stddev_pop_finalize", ReturnTypes.DOUBLE_NULLABLE)),
-    STDDEV_SAMP(Type.STATISTICAL, SqlKind.STDDEV_SAMP, fields(IF("stddev_samp_state", new ArrowType.Binary(), null)),
-        finalizeOp("stddev_samp_finalize", ReturnTypes.DOUBLE_NULLABLE)),
-    VAR_POP(Type.STATISTICAL, SqlKind.VAR_POP, fields(IF("var_pop_state", new ArrowType.Binary(), null)),
-        finalizeOp("var_pop_finalize", ReturnTypes.DOUBLE_NULLABLE)),
-    VAR_SAMP(Type.STATISTICAL, SqlKind.VAR_SAMP, fields(IF("var_samp_state", new ArrowType.Binary(), null)),
-        finalizeOp("var_samp_finalize", ReturnTypes.DOUBLE_NULLABLE)),
+    STDDEV_POP(
+        Type.STATISTICAL,
+        SqlKind.STDDEV_POP,
+        fields(IF("stddev_pop_state", new ArrowType.Binary(), null)),
+        finalizeOp("stddev_pop_finalize", ReturnTypes.DOUBLE_NULLABLE)
+    ),
+    STDDEV_SAMP(
+        Type.STATISTICAL,
+        SqlKind.STDDEV_SAMP,
+        fields(IF("stddev_samp_state", new ArrowType.Binary(), null)),
+        finalizeOp("stddev_samp_finalize", ReturnTypes.DOUBLE_NULLABLE)
+    ),
+    VAR_POP(
+        Type.STATISTICAL,
+        SqlKind.VAR_POP,
+        fields(IF("var_pop_state", new ArrowType.Binary(), null)),
+        finalizeOp("var_pop_finalize", ReturnTypes.DOUBLE_NULLABLE)
+    ),
+    VAR_SAMP(
+        Type.STATISTICAL,
+        SqlKind.VAR_SAMP,
+        fields(IF("var_samp_state", new ArrowType.Binary(), null)),
+        finalizeOp("var_samp_finalize", ReturnTypes.DOUBLE_NULLABLE)
+    ),
 
     // State-expanding — state grows with input rows per key.
     PERCENTILE_CONT(Type.STATE_EXPANDING, SqlKind.PERCENTILE_CONT),
@@ -194,6 +214,13 @@ public enum AggregateFunction {
      */
     public Optional<SqlOperator> finalizeOperator() {
         return Optional.ofNullable(finalizeOperator);
+    }
+
+    /** True when this aggregate ships Binary state that the coord merges via the same function. */
+    public boolean isEngineNativeMerge() {
+        if (type == Type.STATE_EXPANDING) return false;
+        if (intermediateFields == null || intermediateFields.size() != 1) return false;
+        return intermediateFields.get(0).reducer() == null || intermediateFields.get(0).reducer() == this;
     }
 
     /** Maps a Calcite SqlKind to an AggregateFunction, or null if not recognized. Skips OTHER. */

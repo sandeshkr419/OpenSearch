@@ -25,6 +25,9 @@ import java.util.Set;
 final class PplAggregateCallRewriter {
 
     private static final Set<SqlAggFunction> LOCAL_OPS = Set.of(
+        DataFusionFragmentConvertor.LOCAL_SUM_OP,
+        DataFusionFragmentConvertor.LOCAL_MIN_OP,
+        DataFusionFragmentConvertor.LOCAL_MAX_OP,
         DataFusionFragmentConvertor.LOCAL_COUNT_OP,
         DataFusionFragmentConvertor.LOCAL_AVG_OP,
         DataFusionFragmentConvertor.LOCAL_STDDEV_POP_OP,
@@ -81,6 +84,9 @@ final class PplAggregateCallRewriter {
         switch (aggregation.getName().toUpperCase(java.util.Locale.ROOT)) {
             case "AVG" -> targetOp = DataFusionFragmentConvertor.LOCAL_AVG_OP;
             case "COUNT" -> targetOp = DataFusionFragmentConvertor.LOCAL_COUNT_OP;
+            case "SUM", "SUM0" -> targetOp = DataFusionFragmentConvertor.LOCAL_SUM_OP;
+            case "MIN" -> targetOp = DataFusionFragmentConvertor.LOCAL_MIN_OP;
+            case "MAX" -> targetOp = DataFusionFragmentConvertor.LOCAL_MAX_OP;
             case "STDDEV_POP" -> targetOp = DataFusionFragmentConvertor.LOCAL_STDDEV_POP_OP;
             case "STDDEV", "STDDEV_SAMP" -> targetOp = DataFusionFragmentConvertor.LOCAL_STDDEV_SAMP_OP;
             case "VAR_POP" -> targetOp = DataFusionFragmentConvertor.LOCAL_VAR_POP_OP;

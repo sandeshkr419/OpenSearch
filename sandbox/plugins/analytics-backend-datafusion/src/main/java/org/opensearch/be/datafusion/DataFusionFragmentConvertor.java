@@ -304,6 +304,9 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
     static final SqlAggFunction LOCAL_TAKE_OP = localAggOp("take", ReturnTypes.TO_ARRAY, OperandTypes.VARIADIC);
     static final SqlAggFunction LOCAL_FIRST_OP = localAggOp("first_value", ReturnTypes.ARG0, OperandTypes.ANY);
     static final SqlAggFunction LOCAL_LAST_OP = localAggOp("last_value", ReturnTypes.ARG0, OperandTypes.ANY);
+    static final SqlAggFunction LOCAL_SUM_OP = localAggOp("sum", ReturnTypes.ARG0_NULLABLE, OperandTypes.NUMERIC);
+    static final SqlAggFunction LOCAL_MIN_OP = localAggOp("min", ReturnTypes.ARG0_NULLABLE, OperandTypes.ANY);
+    static final SqlAggFunction LOCAL_MAX_OP = localAggOp("max", ReturnTypes.ARG0_NULLABLE, OperandTypes.ANY);
     static final SqlAggFunction LOCAL_COUNT_OP = localAggOp("count", ReturnTypes.BIGINT, OperandTypes.ANY);
     static final SqlAggFunction LOCAL_AVG_OP = localAggOp("avg", ReturnTypes.ARG0_NULLABLE, OperandTypes.NUMERIC);
     static final SqlAggFunction LOCAL_STDDEV_POP_OP = localAggOp("stddev_pop", ReturnTypes.DOUBLE_NULLABLE, OperandTypes.NUMERIC);
@@ -316,8 +319,18 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
 
     /** Isthmus bypass stub: custom SqlAggFunction identity routes through ADDITIONAL_AGGREGATE_SIGS → YAML extensions. */
     private static SqlAggFunction localAggOp(String name, SqlReturnTypeInference returnType, SqlOperandTypeChecker operandTypes) {
-        return new SqlAggFunction(name, null, SqlKind.OTHER_FUNCTION, returnType, null, operandTypes,
-            SqlFunctionCategory.USER_DEFINED_FUNCTION, false, false, Optionality.FORBIDDEN) {
+        return new SqlAggFunction(
+            name,
+            null,
+            SqlKind.OTHER_FUNCTION,
+            returnType,
+            null,
+            operandTypes,
+            SqlFunctionCategory.USER_DEFINED_FUNCTION,
+            false,
+            false,
+            Optionality.FORBIDDEN
+        ) {
         };
     }
 
@@ -341,6 +354,9 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
      */
     private static final List<FunctionMappings.Sig> ADDITIONAL_AGGREGATE_SIGS = List.of(
         FunctionMappings.s(SqlStdOperatorTable.APPROX_COUNT_DISTINCT, "approx_distinct"),
+        FunctionMappings.s(LOCAL_SUM_OP, "sum"),
+        FunctionMappings.s(LOCAL_MIN_OP, "min"),
+        FunctionMappings.s(LOCAL_MAX_OP, "max"),
         FunctionMappings.s(LOCAL_COUNT_OP, "count"),
         FunctionMappings.s(LOCAL_AVG_OP, "avg"),
         FunctionMappings.s(LOCAL_STDDEV_POP_OP, "stddev_pop"),
@@ -631,7 +647,7 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         RelCopyOnWriteVisitor<RuntimeException> visitor = new RelCopyOnWriteVisitor<>() {
             @Override
             public java.util.Optional<Rel> visit(Aggregate aggregate, io.substrait.util.EmptyVisitationContext context)
-                    throws RuntimeException {
+                throws RuntimeException {
                 java.util.Optional<Rel> recursed = super.visit(aggregate, context);
                 Rel base = recursed.orElse(aggregate);
                 Rel rephased = withAggregationPhase(base, phase);
