@@ -65,11 +65,24 @@ public class OpenSearchAggregateShardBucketRule extends RelOptRule {
     @Override
     public boolean matches(RelOptRuleCall call) {
         OpenSearchSort sort = call.rel(0);
-        if (sort.getCollation().getFieldCollations().isEmpty()) return false; // top-K needs a sort key
+        if (sort.getCollation().getFieldCollations().isEmpty()) return false;
         OpenSearchAggregate aggregate = aggregateBelow(sort);
         if (aggregate == null) return false;
         if (aggregate.getMode() != AggregateMode.SINGLE) return false;
-        return aggregate.getShardBucketHint() == null; // idempotent
+        if (aggregate.getShardBucketHint() != null) return false; // idempotent
+        // Skip join/union subtrees — per-shard top-K is only valid for single-table scans.
+        if (hasMultiInput(aggregate)) return false;
+        return true;
+    }
+
+    /** True when any node in the subtree has more than one input (join/union). */
+    private static boolean hasMultiInput(RelNode node) {
+        RelNode current = RelNodeUtils.unwrapHep(node);
+        if (current.getInputs().size() > 1) return true;
+        for (RelNode input : current.getInputs()) {
+            if (hasMultiInput(input)) return true;
+        }
+        return false;
     }
 
     @Override

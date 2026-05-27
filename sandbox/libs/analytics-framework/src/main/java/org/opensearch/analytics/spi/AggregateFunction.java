@@ -62,14 +62,7 @@ public enum AggregateFunction {
         Type.APPROXIMATE,
         SqlKind.OTHER,
         fields(IF("sketch", new ArrowType.Binary(), null)),
-        new SqlFunction(
-            "hll_estimate",
-            SqlKind.OTHER_FUNCTION,
-            ReturnTypes.BIGINT_NULLABLE,
-            null,
-            OperandTypes.BINARY,
-            SqlFunctionCategory.USER_DEFINED_FUNCTION
-        )
+        finalizeOp("hll_estimate", ReturnTypes.BIGINT_NULLABLE)
     ),
     TAKE(Type.STATE_EXPANDING, SqlKind.OTHER, fields(IF("take_state", IntermediateTypeResolver.passThroughArg0(), null))),
     FIRST(Type.STATE_EXPANDING, SqlKind.OTHER, fields(IF("first_state", IntermediateTypeResolver.passThroughArg0(), null))),
