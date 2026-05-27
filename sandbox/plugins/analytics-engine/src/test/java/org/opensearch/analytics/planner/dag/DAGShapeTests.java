@@ -207,7 +207,7 @@ public class DAGShapeTests extends BasePlannerRulesTests {
                         OpenSearchStageInputScan(childStageId=[0], viableBackends=[[mock-parquet]])
                   Stage 0 exchange=SINGLETON
                     OpenSearchSort(sort0=[$0], dir0=[ASC], fetch=[25], viableBackends=[[mock-parquet]], sortExprs=[[$1]])
-                      OpenSearchAggregate(group=[{0}], cnt=[COUNT()], mode=[FINAL], viableBackends=[[mock-parquet]])
+                      OpenSearchAggregate(group=[{0}], cnt=[COUNT()], mode=[SHARD_MERGE], viableBackends=[[mock-parquet]])
                         OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
                 """,
             dag

@@ -23,16 +23,14 @@ import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.rex.RexShuttle;
-import org.opensearch.analytics.planner.PlannerContext;
 import org.opensearch.analytics.planner.RelNodeUtils;
 import org.opensearch.analytics.planner.rel.AggregateMode;
 import org.opensearch.analytics.planner.rel.OpenSearchAggregate;
 import org.opensearch.analytics.planner.rel.OpenSearchSort;
 import org.opensearch.analytics.planner.rel.OpenSearchTableScan;
+import org.opensearch.analytics.planner.rel.OpenSearchDistribution;
 import org.opensearch.analytics.planner.rel.ShardBucketHint;
-import org.opensearch.analytics.settings.AnalyticsApproximationSettings;
 import org.opensearch.analytics.spi.AggregateFunction;
-import org.opensearch.cluster.metadata.IndexMetadata;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -60,11 +58,8 @@ public class OpenSearchAggregateShardBucketRule extends RelOptRule {
     /** PPL {@code head} default; used as coord-limit floor when no LIMIT is set. */
     private static final long DEFAULT_COORD_LIMIT = 10L;
 
-    private final PlannerContext context;
-
-    public OpenSearchAggregateShardBucketRule(PlannerContext context) {
+    public OpenSearchAggregateShardBucketRule() {
         super(operand(OpenSearchSort.class, any()), "OpenSearchAggregateShardBucketRule");
-        this.context = context;
     }
 
     @Override
@@ -200,29 +195,22 @@ public class OpenSearchAggregateShardBucketRule extends RelOptRule {
         return RelCollations.of(fcs);
     }
 
-    /** True when every {@link OpenSearchTableScan} under {@code subtree} has {@code number_of_shards == 1} (CBO won't split, hint never consumed). */
+    /** True when every {@link OpenSearchTableScan} under {@code subtree} has a single shard. */
     private boolean allTablesAreSingleShard(RelNode subtree) {
         boolean[] anyMultiShard = { false };
         boolean[] anyTable = { false };
-        walkSingleShard(subtree, anyMultiShard, anyTable);
+        visitScans(subtree, scan -> {
+            anyTable[0] = true;
+            for (int i = 0; i < scan.getTraitSet().size(); i++) {
+                if (scan.getTraitSet().getTrait(i) instanceof OpenSearchDistribution dist
+                        && dist.getShardCount() != null && dist.getShardCount() > 1) {
+                    anyMultiShard[0] = true;
+                }
+            }
+        });
         return anyTable[0] && !anyMultiShard[0];
     }
 
-    private void walkSingleShard(RelNode node, boolean[] anyMultiShard, boolean[] anyTable) {
-        RelNode current = RelNodeUtils.unwrapHep(node);
-        if (current instanceof OpenSearchTableScan scan) {
-            String tableName = scan.getTable().getQualifiedName().getLast();
-            IndexMetadata indexMetadata = context.getClusterState().metadata().index(tableName);
-            if (indexMetadata != null && indexMetadata.getNumberOfShards() > 1) {
-                anyMultiShard[0] = true;
-            }
-            anyTable[0] = true;
-            return;
-        }
-        for (RelNode input : current.getInputs()) {
-            walkSingleShard(input, anyMultiShard, anyTable);
-        }
-    }
 
     /** {@link Project} immediately below {@code sort}, or {@code null}. */
     private static Project projectBelow(OpenSearchSort sort) {
@@ -239,33 +227,28 @@ public class OpenSearchAggregateShardBucketRule extends RelOptRule {
         return (child instanceof OpenSearchAggregate aggregate) ? aggregate : null;
     }
 
-    /** Min {@code shard_bucket_oversampling_factor} across involved tables; {@code 0.0} disables for the whole query. */
+    /** Min {@code shardBucketFactor} across scans; {@code 0.0} disables. */
     private double resolveFactor(RelNode subtree) {
         double[] state = { Double.MAX_VALUE };
         boolean[] any = { false };
-        collectFactor(subtree, state, any);
+        visitScans(subtree, scan -> {
+            double f = scan.getShardBucketFactor();
+            if (f < state[0]) state[0] = f;
+            any[0] = true;
+        });
         return any[0] ? state[0] : 0.0;
     }
 
-    private void collectFactor(RelNode node, double[] state, boolean[] any) {
+    /** True when every scan has a single shard (CBO won't split). */
+
+    private static void visitScans(RelNode node, java.util.function.Consumer<OpenSearchTableScan> visitor) {
         RelNode current = RelNodeUtils.unwrapHep(node);
         if (current instanceof OpenSearchTableScan scan) {
-            double factor = readFactor(scan);
-            if (factor < state[0]) state[0] = factor;
-            any[0] = true;
+            visitor.accept(scan);
             return;
         }
         for (RelNode input : current.getInputs()) {
-            collectFactor(input, state, any);
+            visitScans(input, visitor);
         }
-    }
-
-    private double readFactor(OpenSearchTableScan scan) {
-        String tableName = scan.getTable().getQualifiedName().getLast();
-        IndexMetadata indexMetadata = context.getClusterState().metadata().index(tableName);
-        // OpenSearchTableScanRule rejects unknown indices before this rule fires.
-        assert indexMetadata != null : "IndexMetadata missing for [" + tableName + "]";
-        assert indexMetadata.getSettings() != null : "IndexMetadata.getSettings() null for [" + tableName + "]";
-        return AnalyticsApproximationSettings.INDEX_ANALYTICS_SHARD_BUCKET_OVERSAMPLING_FACTOR.get(indexMetadata.getSettings());
     }
 }

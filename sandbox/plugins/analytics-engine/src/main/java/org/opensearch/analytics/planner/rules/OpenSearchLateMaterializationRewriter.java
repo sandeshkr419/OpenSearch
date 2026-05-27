@@ -389,7 +389,8 @@ public final class OpenSearchLateMaterializationRewriter {
             origScan.getTable(),
             origScan.getViableBackends(),
             newStorage,
-            rowTypeBuilder.build()
+            rowTypeBuilder.build(),
+            origScan.getShardBucketFactor()
         );
         return new NarrowedScan(newScan, scanIdxRemap);
     }

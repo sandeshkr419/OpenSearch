@@ -36,6 +36,7 @@ public class OpenSearchTableScan extends TableScan implements OpenSearchRelNode 
      * appended. Null in the default case so {@link TableScan#deriveRowType()} drives.
      */
     private final RelDataType overrideRowType;
+    private final double shardBucketFactor;
 
     public OpenSearchTableScan(
         RelOptCluster cluster,
@@ -44,7 +45,7 @@ public class OpenSearchTableScan extends TableScan implements OpenSearchRelNode 
         List<String> viableBackends,
         List<FieldStorageInfo> outputFieldStorage
     ) {
-        this(cluster, traitSet, table, viableBackends, outputFieldStorage, null);
+        this(cluster, traitSet, table, viableBackends, outputFieldStorage, null, 1.5);
     }
 
     /**
@@ -59,17 +60,24 @@ public class OpenSearchTableScan extends TableScan implements OpenSearchRelNode 
         RelOptTable table,
         List<String> viableBackends,
         List<FieldStorageInfo> outputFieldStorage,
-        RelDataType overrideRowType
+        RelDataType overrideRowType,
+        double shardBucketFactor
     ) {
         super(cluster, traitSet, List.of(), table);
         this.viableBackends = viableBackends;
         this.outputFieldStorage = outputFieldStorage;
         this.overrideRowType = overrideRowType;
+        this.shardBucketFactor = shardBucketFactor;
     }
 
     @Override
     public RelDataType deriveRowType() {
         return overrideRowType != null ? overrideRowType : super.deriveRowType();
+    }
+
+    /** Per-index shard bucket oversampling factor (0.0 = disabled). */
+    public double getShardBucketFactor() {
+        return shardBucketFactor;
     }
 
     /**
@@ -93,12 +101,24 @@ public class OpenSearchTableScan extends TableScan implements OpenSearchRelNode 
         int shardCount,
         OpenSearchDistributionTraitDef distTraitDef
     ) {
+        return create(cluster, table, viableBackends, outputFieldStorage, shardCount, distTraitDef, 1.5);
+    }
+
+    public static OpenSearchTableScan create(
+        RelOptCluster cluster,
+        RelOptTable table,
+        List<String> viableBackends,
+        List<FieldStorageInfo> outputFieldStorage,
+        int shardCount,
+        OpenSearchDistributionTraitDef distTraitDef,
+        double shardBucketFactor
+    ) {
         int tableId = table.getQualifiedName().hashCode();
         OpenSearchDistribution distribution = shardCount == 1
             ? distTraitDef.shardSingleton(tableId, shardCount)
             : distTraitDef.shardRandom(tableId, shardCount);
         RelTraitSet traitSet = RelTraitSet.createEmpty().plus(OpenSearchConvention.INSTANCE).plus(distribution);
-        return new OpenSearchTableScan(cluster, traitSet, table, viableBackends, outputFieldStorage);
+        return new OpenSearchTableScan(cluster, traitSet, table, viableBackends, outputFieldStorage, null, shardBucketFactor);
     }
 
     @Override
@@ -113,7 +133,7 @@ public class OpenSearchTableScan extends TableScan implements OpenSearchRelNode 
 
     @Override
     public RelNode copy(RelTraitSet traitSet, List<RelNode> inputs) {
-        return new OpenSearchTableScan(getCluster(), traitSet, getTable(), viableBackends, outputFieldStorage, overrideRowType);
+        return new OpenSearchTableScan(getCluster(), traitSet, getTable(), viableBackends, outputFieldStorage, overrideRowType, shardBucketFactor);
     }
 
     @Override
@@ -128,7 +148,7 @@ public class OpenSearchTableScan extends TableScan implements OpenSearchRelNode 
 
     @Override
     public RelNode copyResolved(String backend, List<RelNode> children, List<OperatorAnnotation> resolvedAnnotations) {
-        return new OpenSearchTableScan(getCluster(), getTraitSet(), getTable(), List.of(backend), outputFieldStorage, overrideRowType);
+        return new OpenSearchTableScan(getCluster(), getTraitSet(), getTable(), List.of(backend), outputFieldStorage, overrideRowType, shardBucketFactor);
     }
 
     @Override

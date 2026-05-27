@@ -308,7 +308,7 @@ public class PlannerImpl {
     private static RelNode executionHints(RelNode input, PlannerContext context, RuleProfilingListener listener) {
         HepProgramBuilder builder = new HepProgramBuilder();
         builder.addMatchOrder(HepMatchOrder.TOP_DOWN);
-        builder.addRuleInstance(new OpenSearchAggregateShardBucketRule(context));
+        builder.addRuleInstance(new OpenSearchAggregateShardBucketRule());
         HepPlanner planner = new HepPlanner(builder.build());
         if (listener != null) {
             planner.addListener(listener);

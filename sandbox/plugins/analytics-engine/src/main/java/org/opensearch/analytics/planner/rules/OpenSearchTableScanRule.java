@@ -107,7 +107,9 @@ public class OpenSearchTableScanRule extends RelOptRule {
                 viableBackends,
                 fieldStorage,
                 resolution.totalShardCount(),
-                context.getDistributionTraitDef()
+                context.getDistributionTraitDef(),
+                org.opensearch.analytics.settings.AnalyticsApproximationSettings
+                    .INDEX_ANALYTICS_SHARD_BUCKET_OVERSAMPLING_FACTOR.get(resolution.concreteIndices().get(0).getSettings())
             )
         );
     }
