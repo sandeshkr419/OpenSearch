@@ -48,7 +48,28 @@ pub(crate) fn apply_aggregate_mode(
     }
 }
 
-/// Walks the plan tree and strips the half that doesn't match `target`.
+/// Conditionally strips the auto-inserted Final aggregate and applies schema coercion.
+/// Strips when the substrait declares partial phase AND the plan contains a state-shipping
+/// wrapper with non-Binary input. When stripped, skips relabel (stale schema from Sort).
+pub(crate) fn maybe_strip_for_partial(
+    plan: Arc<dyn ExecutionPlan>,
+    is_partial_phase: bool,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let needs_strip = is_partial_phase
+        && crate::udaf::state_shipping::plan_contains_state_shipping(&plan);
+    let plan = if needs_strip {
+        apply_aggregate_mode(plan, Mode::Partial)?
+    } else {
+        plan
+    };
+    if !needs_strip {
+        let target = crate::schema_coerce::coerce_inferred_schema(plan.schema());
+        crate::relabel_exec::wrap_if_relabel_needed(plan, target)
+    } else {
+        Ok(plan)
+    }
+}
+
 fn force_aggregate_mode(
     plan: Arc<dyn ExecutionPlan>,
     target: AggregateMode,
@@ -81,22 +102,37 @@ fn force_aggregate_mode(
             }
             _ => Ok(plan),
         }
-    } else if plan.as_any().downcast_ref::<RepartitionExec>().is_some()
-        || plan
-            .as_any()
-            .downcast_ref::<CoalescePartitionsExec>()
-            .is_some()
-    {
-        // Transparent — recurse through
+    } else {
+        // Any other node — recurse through children. Includes ProjectionExec,
+        // FilterExec, RepartitionExec, CoalescePartitionsExec, CoalesceBatchesExec,
+        // SortExec, etc. The non-aggregate node is preserved; only its children
+        // get rewritten.
         let new_children: Vec<Arc<dyn ExecutionPlan>> = plan
             .children()
             .into_iter()
             .map(|c| force_aggregate_mode(Arc::clone(c), target))
             .collect::<Result<_>>()?;
-        plan.with_new_children(new_children)
-    } else {
-        // Leaf or unrelated node — return as-is
-        Ok(plan)
+        if new_children.is_empty() {
+            Ok(plan)
+        } else if let Some(proj) = plan.as_any().downcast_ref::<datafusion::physical_plan::projection::ProjectionExec>() {
+            // ProjectionExec::with_new_children reuses the old Projector (with cached
+            // output schema). When the child's schema changed (e.g. Float64 → Binary
+            // after stripping), the stale schema causes runtime Arrow type mismatches.
+            // Rebuild from expressions + new child to recompute the output schema.
+            let exprs: Vec<(Arc<dyn datafusion::physical_plan::PhysicalExpr>, String)> = proj
+                .expr()
+                .iter()
+                .map(|pe| (Arc::clone(&pe.expr), pe.alias.clone()))
+                .collect();
+            Ok(Arc::new(
+                datafusion::physical_plan::projection::ProjectionExec::try_new(
+                    exprs,
+                    Arc::clone(&new_children[0]),
+                )?,
+            ))
+        } else {
+            plan.with_new_children(new_children)
+        }
     }
 }
 

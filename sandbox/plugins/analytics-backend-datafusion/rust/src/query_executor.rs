@@ -90,6 +90,7 @@ pub async fn execute_query(
         .with_config(config)
         .with_runtime_env(runtime_env)
         .with_default_features()
+        .with_physical_optimizer_rules(crate::agg_mode::physical_optimizer_rules_without_combine())
         .build();
 
     let ctx = SessionContext::new_with_state(state);
@@ -157,15 +158,12 @@ pub async fn execute_query(
     let substrait_plan = Plan::decode(plan_bytes.as_slice()).map_err(|e| {
         DataFusionError::Execution(format!("Failed to decode Substrait: {}", e))
     })?;
+    let is_partial_phase = crate::udaf::state_shipping::substrait_has_partial_phase(&substrait_plan);
 
     let logical_plan = from_substrait_plan(&ctx.state(), &substrait_plan).await?;
     let dataframe = ctx.execute_logical_plan(logical_plan).await?;
     let physical_plan = dataframe.create_physical_plan().await?;
-    // Retag any physical-plan output columns whose type tags differ from what Substrait
-    // declared on bit-compatible Int↔UInt pairs (see crate::relabel_exec). The target is
-    // schema_coerce::coerce_inferred_schema(physical_schema) — the same narrowing the
-    // partition-stream registration uses, so the consumer's StreamingTable and the
-    // batches arriving from this producer agree by construction.
+    let physical_plan = crate::agg_mode::maybe_strip_for_partial(physical_plan, is_partial_phase)?;
     let target_schema = crate::schema_coerce::coerce_inferred_schema(physical_plan.schema());
     let physical_plan = crate::relabel_exec::wrap_if_relabel_needed(physical_plan, target_schema)?;
 
@@ -272,6 +270,7 @@ pub async fn execute_with_context(
         let substrait_plan = Plan::decode(plan_bytes).map_err(|e| {
             DataFusionError::Execution(format!("Failed to decode Substrait: {}", e))
         })?;
+        let is_partial_phase = crate::udaf::state_shipping::substrait_has_partial_phase(&substrait_plan);
 
         // Union schema widening was applied at table registration (session_context::widen_to_union_schema).
         let logical_plan = from_substrait_plan(&handle.ctx.state(), &substrait_plan).await?;
@@ -280,8 +279,7 @@ pub async fn execute_with_context(
         // create_physical_plan runs all registered physical optimizer rules including
         // ProjectRowIdOptimizer (registered in session_context when strategy=ListingTable).
         let physical_plan = dataframe.create_physical_plan().await?;
-        let target_schema = crate::schema_coerce::coerce_inferred_schema(physical_plan.schema());
-        let physical_plan = crate::relabel_exec::wrap_if_relabel_needed(physical_plan, target_schema)?;
+        let physical_plan = crate::agg_mode::maybe_strip_for_partial(physical_plan, is_partial_phase)?;
         log_debug!("DataFusion physical plan:\n{}", displayable(physical_plan.as_ref()).indent(true));
 
         let df_stream = execute_stream(physical_plan, handle.ctx.task_ctx()).map_err(|e| {

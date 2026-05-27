@@ -1,97 +1,95 @@
-%YAML 1.2
 ---
 urn: extension:org.opensearch:aggregate_functions
 aggregate_functions:
+  - name: avg
+    description: "Average. State shipped as IPC-encoded Binary via StateShippingUdaf."
+    impls:
+      - args:
+          - value: any1
+            name: "input"
+        nullability: DECLARED_OUTPUT
+        return: any1
+  - name: stddev_pop
+    description: "Population standard deviation. State shipped as IPC-encoded Binary."
+    impls:
+      - args:
+          - value: any1
+            name: "input"
+        nullability: DECLARED_OUTPUT
+        return: any1
+  - name: stddev_samp
+    description: "Sample standard deviation. State shipped as IPC-encoded Binary."
+    impls:
+      - args:
+          - value: any1
+            name: "input"
+        nullability: DECLARED_OUTPUT
+        return: any1
+  - name: var_pop
+    description: "Population variance. State shipped as IPC-encoded Binary."
+    impls:
+      - args:
+          - value: any1
+            name: "input"
+        nullability: DECLARED_OUTPUT
+        return: any1
+  - name: var_samp
+    description: "Sample variance. State shipped as IPC-encoded Binary."
+    impls:
+      - args:
+          - value: any1
+            name: "input"
+        nullability: DECLARED_OUTPUT
+        return: any1
+  - name: count
+    description: "Count (and count distinct). State shipped as IPC-encoded Binary."
+    impls:
+      - args:
+          - value: any1
+            name: "input"
+        nullability: DECLARED_OUTPUT
+        return: any1
   - name: approx_distinct
     description: >-
       Approximate distinct count using HyperLogLog. Maps to DataFusion's
-      approx_distinct aggregate function via its Substrait consumer.
+      built-in `approx_distinct` function. State shipped as IPC-encoded Binary.
     impls:
       - args:
-          - value: any
+          - value: any1
             name: "input"
+        nullability: DECLARED_OUTPUT
         return: i64
-  - name: min
-    description: >-
-      Min of a set of string values. Standard substrait functions_arithmetic.yaml
-      only defines min for i8..fp64; this overload extends it to strings so PPL
-      `stats min(varchar_field)` can bind a Substrait call and dispatch to
-      DataFusion's native min UDF, which supports Utf8 natively.
-    impls:
-      - args:
-          - name: x
-            value: "string"
-        nullability: DECLARED_OUTPUT
-        decomposable: MANY
-        intermediate: "string?"
-        return: "string?"
-  - name: max
-    description: >-
-      Max of a set of string values. See min above.
-    impls:
-      - args:
-          - name: x
-            value: "string"
-        nullability: DECLARED_OUTPUT
-        decomposable: MANY
-        intermediate: "string?"
-        return: "string?"
   - name: take
-    description: >-
-      PPL `take(field, N)` — bounded, arrival-order array. Custom Rust UDAF in
-      `rust/src/udaf/take.rs`. Distinct generics `any1`/`any2` because state
-      and n have unrelated types.
+    description: "Collects the first N values per group into an array."
     impls:
       - args:
-          - name: x
-            value: any1
-          - name: n
-            value: any2
+          - value: any1
+            name: "input"
+          - value: i64
+            name: "limit"
+        nullability: DECLARED_OUTPUT
         return: any1
       - args:
-          - name: x
-            value: any1
+          - value: any1
+            name: "state"
+        nullability: DECLARED_OUTPUT
         return: any1
-  - name: first_value
-    description: PPL `first(field)` — DataFusion native first_value.
-    impls:
-      - args:
-          - name: x
-            value: any
-        return: any
-  - name: last_value
-    description: PPL `last(field)` — DataFusion native last_value.
-    impls:
-      - args:
-          - name: x
-            value: any
-        return: any
-  - name: array_agg
-    description: >-
-      PPL `list(field)` (and `values(field)` with `INVOCATION_DISTINCT`) —
-      DataFusion native array_agg. Used at PARTIAL only; FINAL re-aggregates
-      via list_merge / list_merge_distinct.
-    impls:
-      - args:
-          - name: x
-            value: any
-        return: any
   - name: list_merge
-    description: >-
-      Cross-shard FINAL of LIST. Concatenates per-shard `List<elem>` states.
-      Custom Rust UDAF in `rust/src/udaf/list_merge.rs`.
+    description: "Merges per-shard list states by concatenation."
     impls:
       - args:
-          - name: x
-            value: any
-        return: any
+          - value: any1
+            name: "input"
+        nullability: DECLARED_OUTPUT
+        return: any1
   - name: list_merge_distinct
-    description: Cross-shard FINAL of VALUES — concatenates and re-deduplicates.
+    description: "Merges per-shard list states and deduplicates."
     impls:
       - args:
-          - name: x
-            value: any
-        return: any
+          - value: any1
+            name: "input"
+        nullability: DECLARED_OUTPUT
+        return: any1
   - name: internal_pattern
     description: >-
       PPL `patterns ... method=BRAIN` (aggregation mode). Custom Rust UDAF in

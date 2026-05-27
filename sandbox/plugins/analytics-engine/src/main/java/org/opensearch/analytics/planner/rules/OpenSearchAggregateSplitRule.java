@@ -271,7 +271,6 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
     private static boolean isEngineNativeMerge(AggregateCall call) {
         AggregateFunction fn = AggregateFunction.fromSqlAggFunction(call.getAggregation());
         if (fn == null) return false;
-        if (fn.getType() != AggregateFunction.Type.APPROXIMATE) return false;
         List<AggregateFunction.IntermediateField> fields = fn.intermediateFields();
         if (fields == null || fields.size() != 1) return false;
         return fields.get(0).reducer() == fn;

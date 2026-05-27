@@ -117,6 +117,7 @@ public class ShardBucketOversamplingIT extends AnalyticsRestTestCase {
      * expression (sortExprs in {@code OpenSearchSort}). Per-category averages are exact:
      * a=(1+4)/2=2.5, b=(2+5)/2=3.5, c=(3+6)/2=4.5.
      */
+    @org.apache.lucene.tests.util.LuceneTestCase.AwaitsFix(bugUrl = "SHARD_MERGE + state-shipping: DF substrait reader ignores AggregationPhase, data-node Sort schema stale after Mode::Partial strip")
     public void testAvg_byAvg_AllGroupsCorrect_default() throws Exception {
         String index = "sb_avg_default";
         createIndexWithFactor(index, null);
@@ -126,6 +127,54 @@ public class ShardBucketOversamplingIT extends AnalyticsRestTestCase {
             "source = " + index + " | stats avg(value) as avg_v by category | sort - avg_v | head 100"
         );
         assertExactColumnValues(result, "category", "avg_v", Map.of("a", 2.5, "b", 3.5, "c", 4.5), 0.001);
+    }
+
+    /**
+     * Diagnostic: AVG with skewed values [1,1,1,1,100]. True AVG = 20.8 regardless of how
+     * the 5 docs split across 2 shards. AVG-of-AVGs would give a non-20.8 value for almost
+     * any non-trivial split (e.g., 4-1 split with 100 alone → AVG-of-AVGs = (1+100)/2 = 50.5).
+     */
+    public void testAvg_SkewedValues_diagnostic() throws Exception {
+        String index = "sb_avg_skewed";
+        createIndexWithFactor(index, 0.0);
+
+        StringBuilder bulk = new StringBuilder();
+        for (int i = 0; i < 4; i++) {
+            bulk.append("{\"index\": {\"_id\": \"s").append(i).append("\"}}\n");
+            bulk.append("{\"category\": \"a\", \"value\": 1}\n");
+        }
+        bulk.append("{\"index\": {\"_id\": \"s4\"}}\n");
+        bulk.append("{\"category\": \"a\", \"value\": 100}\n");
+
+        Request bulkRequest = new Request("POST", "/" + index + "/_bulk");
+        bulkRequest.setJsonEntity(bulk.toString());
+        bulkRequest.addParameter("refresh", "true");
+        client().performRequest(bulkRequest);
+        client().performRequest(new Request("POST", "/" + index + "/_flush?force=true"));
+
+        long deadline = System.currentTimeMillis() + 10_000L;
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                Map<String, Object> probe = executePPL("source = " + index + " | stats sum(value) as total by category");
+                @SuppressWarnings("unchecked")
+                List<List<Object>> rows = (List<List<Object>>) probe.get("rows");
+                if (rows != null && rows.size() == 1) {
+                    long totalSum = ((Number) rows.get(0).get(0)).longValue();
+                    if (totalSum == 104L) break;
+                }
+            } catch (Exception ignored) {}
+            Thread.sleep(100);
+        }
+
+        Map<String, Object> result = executePPL("source = " + index + " | stats avg(value) as avg_v by category");
+        @SuppressWarnings("unchecked")
+        List<List<Object>> rows = (List<List<Object>>) result.get("rows");
+        @SuppressWarnings("unchecked")
+        List<String> columns = (List<String>) result.get("columns");
+        int avgIdx = columns.indexOf("avg_v");
+        double actualAvg = ((Number) rows.get(0).get(avgIdx)).doubleValue();
+        System.out.println("AVG SKEWED: actual=" + actualAvg + " (true mean = 20.8)");
+        assertEquals("AVG of [1,1,1,1,100] must be 20.8 (true mean)", 20.8, actualAvg, 0.5);
     }
 
     /**

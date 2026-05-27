@@ -38,15 +38,19 @@ public enum AggregateFunction {
     SUM0(Type.SIMPLE, SqlKind.SUM0),
     MIN(Type.SIMPLE, SqlKind.MIN),
     MAX(Type.SIMPLE, SqlKind.MAX),
-    COUNT(Type.SIMPLE, SqlKind.COUNT, fields(IF("count", new ArrowType.Int(64, true), SUM))),
-    // AVG: decomposed into SUM/COUNT by OpenSearchAggregateReduceRule before this enum is consulted.
-    AVG(Type.SIMPLE, SqlKind.AVG),
+    COUNT(Type.SIMPLE, SqlKind.COUNT, fields(IF("count_state", new ArrowType.Binary(), null))),
+    // State-shipping: intermediate state encoded as Binary on the wire via StateShippingUdaf.
+    AVG(Type.SIMPLE, SqlKind.AVG, fields(IF("avg_state", new ArrowType.Binary(), null)),
+        finalizeOp("avg_finalize", ReturnTypes.DOUBLE_NULLABLE)),
 
-    // Statistical — fixed-size state; decomposed by OpenSearchAggregateReduceRule.
-    STDDEV_POP(Type.STATISTICAL, SqlKind.STDDEV_POP),
-    STDDEV_SAMP(Type.STATISTICAL, SqlKind.STDDEV_SAMP),
-    VAR_POP(Type.STATISTICAL, SqlKind.VAR_POP),
-    VAR_SAMP(Type.STATISTICAL, SqlKind.VAR_SAMP),
+    STDDEV_POP(Type.STATISTICAL, SqlKind.STDDEV_POP, fields(IF("stddev_pop_state", new ArrowType.Binary(), null)),
+        finalizeOp("stddev_pop_finalize", ReturnTypes.DOUBLE_NULLABLE)),
+    STDDEV_SAMP(Type.STATISTICAL, SqlKind.STDDEV_SAMP, fields(IF("stddev_samp_state", new ArrowType.Binary(), null)),
+        finalizeOp("stddev_samp_finalize", ReturnTypes.DOUBLE_NULLABLE)),
+    VAR_POP(Type.STATISTICAL, SqlKind.VAR_POP, fields(IF("var_pop_state", new ArrowType.Binary(), null)),
+        finalizeOp("var_pop_finalize", ReturnTypes.DOUBLE_NULLABLE)),
+    VAR_SAMP(Type.STATISTICAL, SqlKind.VAR_SAMP, fields(IF("var_samp_state", new ArrowType.Binary(), null)),
+        finalizeOp("var_samp_finalize", ReturnTypes.DOUBLE_NULLABLE)),
 
     // State-expanding — state grows with input rows per key.
     PERCENTILE_CONT(Type.STATE_EXPANDING, SqlKind.PERCENTILE_CONT),
@@ -262,6 +266,18 @@ public enum AggregateFunction {
 
     private static IntermediateField IF(String name, ArrowType arrowType, AggregateFunction reducer) {
         return new IntermediateField(name, IntermediateTypeResolver.fixed(arrowType), reducer);
+    }
+
+    /** Builds a `(BINARY) → returnType` Calcite SqlFunction stub for {@link #finalizeOperator}. */
+    private static SqlFunction finalizeOp(String name, org.apache.calcite.sql.type.SqlReturnTypeInference returnType) {
+        return new SqlFunction(
+            name,
+            SqlKind.OTHER_FUNCTION,
+            returnType,
+            null,
+            OperandTypes.BINARY,
+            SqlFunctionCategory.USER_DEFINED_FUNCTION
+        );
     }
 
     private static IntermediateField IF(String name, IntermediateTypeResolver typeResolver, AggregateFunction reducer) {

@@ -37,7 +37,6 @@ public class RuleProfilingListenerTests extends BasePlannerRulesTests {
         "subquery-remove",
         "reduce-expressions",
         "pushdown-rules",
-        "aggregate-decompose",
         "marking",
         "execution-hints",
         "cbo"

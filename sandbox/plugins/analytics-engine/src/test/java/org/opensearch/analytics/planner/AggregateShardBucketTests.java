@@ -195,18 +195,18 @@ public class AggregateShardBucketTests extends PlanShapeTestBase {
         );
         RelNode result = runPlanner(plan, multiShardContext());
         // shardSize = ceil(max(50, 10) * 1.5) + 10 = 85.
-        // Inner shard Sort sortExprs reference the recompose RexNode CAST(SUM/COUNT) over the
-        // shard-side FINAL aggregate's outputs ($1=SUM, $2=COUNT). The synthetic dense
-        // collation has a single entry at index 0.
+        // AVG is engine-native-merge (intermediateFields=[(avg_state, Binary, null=self)]),
+        // so shard side runs AggregateMode.SHARD_MERGE — ships state on the wire and
+        // coord runs FINAL state-merge. Shard Sort sortExprs reference avg_finalize($1)
+        // to produce a sortable Float64 from the Binary state column.
         assertPlanShape(
             """
                 OpenSearchSort(sort0=[$1], dir0=[DESC], fetch=[50], viableBackends=[[mock-parquet]])
-                  OpenSearchProject(status=[$0], avg_size=[ANNOTATED_PROJECT_EXPR(id=3, backends=[mock-parquet], CAST(ANNOTATED_PROJECT_EXPR(id=2, backends=[mock-parquet], /($1, $2))):INTEGER NOT NULL)], viableBackends=[[mock-parquet]])
-                    OpenSearchAggregate(group=[{0}], agg#0=[SUM($1)], agg#1=[COUNT()], mode=[FINAL], viableBackends=[[mock-parquet]])
-                      OpenSearchExchangeReducer(viableBackends=[[mock-parquet]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
-                        OpenSearchSort(sort0=[$0], dir0=[DESC], fetch=[85], viableBackends=[[mock-parquet]], sortExprs=[[ANNOTATED_PROJECT_EXPR(id=3, backends=[mock-parquet], CAST(ANNOTATED_PROJECT_EXPR(id=2, backends=[mock-parquet], /($1, $2))):INTEGER NOT NULL)]])
-                          OpenSearchAggregate(group=[{0}], agg#0=[SUM($1)], agg#1=[COUNT()], mode=[FINAL], viableBackends=[[mock-parquet]])
-                            OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
+                  OpenSearchAggregate(group=[{0}], avg_size=[AVG($1)], mode=[FINAL], viableBackends=[[mock-parquet]])
+                    OpenSearchExchangeReducer(viableBackends=[[mock-parquet]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
+                      OpenSearchSort(sort0=[$0], dir0=[DESC], fetch=[85], viableBackends=[[mock-parquet]], sortExprs=[[avg_finalize($1)]])
+                        OpenSearchAggregate(group=[{0}], avg_size=[AVG($1)], mode=[SHARD_MERGE], viableBackends=[[mock-parquet]])
+                          OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
                 """,
             result
         );

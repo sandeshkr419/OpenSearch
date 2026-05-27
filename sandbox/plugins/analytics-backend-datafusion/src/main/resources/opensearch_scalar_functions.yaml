@@ -979,18 +979,52 @@ scalar_functions:
         return: string
 
   - name: "hll_estimate"
-    description: >-
-      Cardinality estimate from a serialized HyperLogLog sketch. Input is the
-      16384-byte register array produced by DataFusion's `approx_distinct` UDAF;
-      output is the same Int64 cardinality the UDAF's evaluate() would return
-      for that sketch. Used as the finalize expression for engine-native-merge
-      aggregates (DC) by the analytics-engine shard-bucket-oversampling rule's
-      expression-based shard sort key.
+    description: "Finalize approx_distinct state → Int64 cardinality."
     impls:
       - args:
           - { name: state, value: "binary" }
         nullability: DECLARED_OUTPUT
         return: i64
+
+  - name: "avg_finalize"
+    description: "Finalize avg state → Float64."
+    impls:
+      - args:
+          - { name: state, value: "binary" }
+        nullability: DECLARED_OUTPUT
+        return: fp64
+
+  - name: "stddev_pop_finalize"
+    description: "Finalize stddev_pop state → Float64."
+    impls:
+      - args:
+          - { name: state, value: "binary" }
+        nullability: DECLARED_OUTPUT
+        return: fp64
+
+  - name: "stddev_samp_finalize"
+    description: "Finalize stddev_samp state → Float64."
+    impls:
+      - args:
+          - { name: state, value: "binary" }
+        nullability: DECLARED_OUTPUT
+        return: fp64
+
+  - name: "var_pop_finalize"
+    description: "Finalize var_pop state → Float64."
+    impls:
+      - args:
+          - { name: state, value: "binary" }
+        nullability: DECLARED_OUTPUT
+        return: fp64
+
+  - name: "var_samp_finalize"
+    description: "Finalize var_samp state → Float64."
+    impls:
+      - args:
+          - { name: state, value: "binary" }
+        nullability: DECLARED_OUTPUT
+        return: fp64
 
   - name: "crc32"
     description: "Return the CRC-32 checksum of the input string as a non-negative integer."

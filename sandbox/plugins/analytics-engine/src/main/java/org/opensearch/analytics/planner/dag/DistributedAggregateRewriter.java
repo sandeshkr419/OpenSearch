@@ -43,8 +43,12 @@ final class DistributedAggregateRewriter {
 
     static RelNode rewrite(OpenSearchAggregate finalAgg) {
         RelNode exchange = finalAgg.getInput();
-        if (exchange.getInputs().isEmpty()) return finalAgg;
-        if (!(exchange.getInputs().get(0) instanceof OpenSearchStageInputScan stageInput)) return finalAgg;
+        if (exchange.getInputs().isEmpty()) {
+            return finalAgg;
+        }
+        if (!(exchange.getInputs().get(0) instanceof OpenSearchStageInputScan stageInput)) {
+            return finalAgg;
+        }
 
         RelDataTypeFactory tf = finalAgg.getCluster().getTypeFactory();
         int groupCount = finalAgg.getGroupSet().cardinality();
@@ -71,9 +75,9 @@ final class DistributedAggregateRewriter {
                 exchangeTypes.set(groupCount + i, field.typeResolver().resolve(List.of(partialOutputType), tf));
             } else {
                 throw new IllegalStateException(
-                    "Multi-field decomposition for ["
+                    "Multi-field intermediate state declared for ["
                         + call.getAggregation().getName()
-                        + "] should have been reduced by OpenSearchAggregateReduceRule during HEP marking"
+                        + "]; engine-native merge supports only single-field state"
                 );
             }
             perCallField.add(field);

@@ -70,14 +70,16 @@ public class AggregateFunctionTests extends OpenSearchTestCase {
         assertEquals(SqlTypeName.BIGINT, resolve(fields.get(0), integer).getSqlTypeName());
     }
 
-    // ── AVG / STDDEV / VAR: handled by Calcite's reduce rule — no enum metadata ──
+    // ── AVG / STDDEV / VAR: state-shipping (single Binary intermediate, reducer == self) ──
 
-    public void testAvgHasNoDecomposition() {
-        // AVG decomposition is driven by OpenSearchAggregateReduceRule in HEP, not by the
-        // enum. Enum declares no intermediate — post-reduction plan carries primitive SUM/
-        // COUNT calls whose enum entries ARE decompositions (function-swap / pass-through).
-        assertFalse(AVG.hasDecomposition());
-        assertNull(AVG.intermediateFields());
+    public void testAvgHasDecomposition() {
+        // AVG ships state on the wire as a single Binary column; engine-native merge
+        // (FINAL aggregator = AVG, reducer == self).
+        assertTrue(AVG.hasDecomposition());
+        List<AggregateFunction.IntermediateField> fields = AVG.intermediateFields();
+        assertEquals(1, fields.size());
+        assertEquals("avg_state", fields.get(0).name());
+        assertSame(AVG, fields.get(0).reducer());
     }
 
     // ── APPROX_COUNT_DISTINCT: engine-native (single binary field, reducer == self) ──

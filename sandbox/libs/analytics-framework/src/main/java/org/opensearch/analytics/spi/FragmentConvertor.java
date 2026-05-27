@@ -57,6 +57,11 @@ public interface FragmentConvertor {
         throw new UnsupportedOperationException("convertFragment not implemented for this backend");
     }
 
+    /** Like {@link #convertFragment} but stamps INITIAL_TO_INTERMEDIATE phase on all aggregate measures. */
+    default byte[] convertShardMergeFragment(RelNode fragment) {
+        return convertFragment(fragment);
+    }
+
     /**
      * Attaches a partial aggregate on top of already-converted inner bytes.
      * The backend deserializes the inner plan and wraps it with its partial

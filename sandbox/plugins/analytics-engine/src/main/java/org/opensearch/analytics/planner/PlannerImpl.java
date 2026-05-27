@@ -29,7 +29,6 @@ import org.apache.calcite.tools.RelBuilder;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.analytics.planner.rel.OpenSearchDistributionTraitDef;
-import org.opensearch.analytics.planner.rules.OpenSearchAggregateReduceRule;
 import org.opensearch.analytics.planner.rules.OpenSearchAggregateRule;
 import org.opensearch.analytics.planner.rules.OpenSearchAggregateShardBucketRule;
 import org.opensearch.analytics.planner.rules.OpenSearchAggregateSplitRule;
@@ -90,7 +89,6 @@ public class PlannerImpl {
         modifiedRelNode = removeSubQueries(modifiedRelNode, listener);
         modifiedRelNode = reduceExpressions(modifiedRelNode, listener);
         modifiedRelNode = pushdownRules(modifiedRelNode, listener);
-        modifiedRelNode = decomposeAggregates(modifiedRelNode, listener);
         modifiedRelNode = mark(modifiedRelNode, context, listener);
         LOGGER.info("After marking:\n{}", RelOptUtil.toString(modifiedRelNode));
         // TODO(combine-delegated-predicates): a post-marking HEP rule should fuse same-backend
@@ -227,29 +225,6 @@ public class PlannerImpl {
             return planner.findBestExp();
         } finally {
             if (listener != null) listener.endPhase("pushdown-rules");
-        }
-    }
-
-    /**
-     * Phase 1b: decompose AVG / STDDEV / VAR into primitive SUM/COUNT (+ SUM_SQ for variance) plus a
-     * scalar LogicalProject computing the quotient. Runs as its own HEP pass on plain LogicalAggregate
-     * before {@link OpenSearchAggregateRule} marks it; the marking phase, the Volcano split rule, and
-     * the AggregateDecompositionResolver then see correctly-typed primitives.
-     */
-    private static RelNode decomposeAggregates(RelNode input, RuleProfilingListener listener) {
-        HepProgramBuilder builder = new HepProgramBuilder();
-        builder.addMatchOrder(HepMatchOrder.BOTTOM_UP);
-        builder.addRuleInstance(new OpenSearchAggregateReduceRule());
-        HepPlanner planner = new HepPlanner(builder.build());
-        if (listener != null) {
-            planner.addListener(listener);
-            listener.beginPhase("aggregate-decompose");
-        }
-        try {
-            planner.setRoot(input);
-            return planner.findBestExp();
-        } finally {
-            if (listener != null) listener.endPhase("aggregate-decompose");
         }
     }
 

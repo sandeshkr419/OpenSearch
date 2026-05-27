@@ -35,6 +35,8 @@ import org.apache.calcite.sql.fun.SqlLibraryOperators;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.type.OperandTypes;
 import org.apache.calcite.sql.type.ReturnTypes;
+import org.apache.calcite.sql.type.SqlOperandTypeChecker;
+import org.apache.calcite.sql.type.SqlReturnTypeInference;
 import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.calcite.util.Optionality;
 import org.apache.logging.log4j.LogManager;
@@ -76,6 +78,7 @@ import io.substrait.relation.Filter;
 import io.substrait.relation.NamedScan;
 import io.substrait.relation.Project;
 import io.substrait.relation.Rel;
+import io.substrait.relation.RelCopyOnWriteVisitor;
 import io.substrait.relation.Sort;
 import io.substrait.type.NamedStruct;
 import io.substrait.type.Type;
@@ -212,6 +215,11 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         FunctionMappings.s(SqlLibraryOperators.MD5, "md5"),
         FunctionMappings.s(SqlLibraryOperators.SHA1, "sha1"),
         FunctionMappings.s(AggregateFunction.APPROX_COUNT_DISTINCT.finalizeOperator().orElseThrow(), "hll_estimate"),
+        FunctionMappings.s(AggregateFunction.AVG.finalizeOperator().orElseThrow(), "avg_finalize"),
+        FunctionMappings.s(AggregateFunction.STDDEV_POP.finalizeOperator().orElseThrow(), "stddev_pop_finalize"),
+        FunctionMappings.s(AggregateFunction.STDDEV_SAMP.finalizeOperator().orElseThrow(), "stddev_samp_finalize"),
+        FunctionMappings.s(AggregateFunction.VAR_POP.finalizeOperator().orElseThrow(), "var_pop_finalize"),
+        FunctionMappings.s(AggregateFunction.VAR_SAMP.finalizeOperator().orElseThrow(), "var_samp_finalize"),
         FunctionMappings.s(SqlLibraryOperators.CRC32, "crc32"),
         FunctionMappings.s(Sha2FunctionAdapter.DIGEST, "digest"),
         FunctionMappings.s(Sha2FunctionAdapter.ENCODE, "encode"),
@@ -293,92 +301,25 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
      * <p>VARIADIC operand types because PARTIAL and FINAL aggregate forms differ in
      * arity (2-arg take(field,N) vs 1-arg take(state)).
      */
-    static final SqlAggFunction LOCAL_TAKE_OP = new SqlAggFunction(
-        "take",
-        null,
-        SqlKind.OTHER_FUNCTION,
-        ReturnTypes.TO_ARRAY,
-        null,
-        OperandTypes.VARIADIC,
-        SqlFunctionCategory.USER_DEFINED_FUNCTION,
-        false,
-        false,
-        Optionality.FORBIDDEN
-    ) {
-    };
+    static final SqlAggFunction LOCAL_TAKE_OP = localAggOp("take", ReturnTypes.TO_ARRAY, OperandTypes.VARIADIC);
+    static final SqlAggFunction LOCAL_FIRST_OP = localAggOp("first_value", ReturnTypes.ARG0, OperandTypes.ANY);
+    static final SqlAggFunction LOCAL_LAST_OP = localAggOp("last_value", ReturnTypes.ARG0, OperandTypes.ANY);
+    static final SqlAggFunction LOCAL_COUNT_OP = localAggOp("count", ReturnTypes.BIGINT, OperandTypes.ANY);
+    static final SqlAggFunction LOCAL_AVG_OP = localAggOp("avg", ReturnTypes.ARG0_NULLABLE, OperandTypes.NUMERIC);
+    static final SqlAggFunction LOCAL_STDDEV_POP_OP = localAggOp("stddev_pop", ReturnTypes.DOUBLE_NULLABLE, OperandTypes.NUMERIC);
+    static final SqlAggFunction LOCAL_STDDEV_SAMP_OP = localAggOp("stddev_samp", ReturnTypes.DOUBLE_NULLABLE, OperandTypes.NUMERIC);
+    static final SqlAggFunction LOCAL_VAR_POP_OP = localAggOp("var_pop", ReturnTypes.DOUBLE_NULLABLE, OperandTypes.NUMERIC);
+    static final SqlAggFunction LOCAL_VAR_SAMP_OP = localAggOp("var_samp", ReturnTypes.DOUBLE_NULLABLE, OperandTypes.NUMERIC);
+    static final SqlAggFunction LOCAL_ARRAY_AGG_OP = localAggOp("array_agg", ReturnTypes.TO_ARRAY, OperandTypes.ANY);
+    static final SqlAggFunction LOCAL_LIST_MERGE_OP = localAggOp("list_merge", ReturnTypes.ARG0, OperandTypes.ANY);
+    static final SqlAggFunction LOCAL_LIST_MERGE_DISTINCT_OP = localAggOp("list_merge_distinct", ReturnTypes.ARG0, OperandTypes.ANY);
 
-    static final SqlAggFunction LOCAL_FIRST_OP = new SqlAggFunction(
-        "first_value",
-        null,
-        SqlKind.OTHER_FUNCTION,
-        ReturnTypes.ARG0,
-        null,
-        OperandTypes.ANY,
-        SqlFunctionCategory.USER_DEFINED_FUNCTION,
-        false,
-        false,
-        Optionality.FORBIDDEN
-    ) {
-    };
-
-    static final SqlAggFunction LOCAL_LAST_OP = new SqlAggFunction(
-        "last_value",
-        null,
-        SqlKind.OTHER_FUNCTION,
-        ReturnTypes.ARG0,
-        null,
-        OperandTypes.ANY,
-        SqlFunctionCategory.USER_DEFINED_FUNCTION,
-        false,
-        false,
-        Optionality.FORBIDDEN
-    ) {
-    };
-
-    /** Used by both LIST (isDistinct from the call) and VALUES (forces isDistinct=true). */
-    static final SqlAggFunction LOCAL_ARRAY_AGG_OP = new SqlAggFunction(
-        "array_agg",
-        null,
-        SqlKind.OTHER_FUNCTION,
-        ReturnTypes.TO_ARRAY,
-        null,
-        OperandTypes.ANY,
-        SqlFunctionCategory.USER_DEFINED_FUNCTION,
-        false,
-        false,
-        Optionality.FORBIDDEN
-    ) {
-    };
-
-    /** FINAL-side merge for LIST — custom Rust UDAF that un-nests per-shard list states. */
-    static final SqlAggFunction LOCAL_LIST_MERGE_OP = new SqlAggFunction(
-        "list_merge",
-        null,
-        SqlKind.OTHER_FUNCTION,
-        ReturnTypes.ARG0,
-        null,
-        OperandTypes.ANY,
-        SqlFunctionCategory.USER_DEFINED_FUNCTION,
-        false,
-        false,
-        Optionality.FORBIDDEN
-    ) {
-    };
-
-    /** FINAL-side merge for VALUES — re-deduplicates after concatenation. */
-    static final SqlAggFunction LOCAL_LIST_MERGE_DISTINCT_OP = new SqlAggFunction(
-        "list_merge_distinct",
-        null,
-        SqlKind.OTHER_FUNCTION,
-        ReturnTypes.ARG0,
-        null,
-        OperandTypes.ANY,
-        SqlFunctionCategory.USER_DEFINED_FUNCTION,
-        false,
-        false,
-        Optionality.FORBIDDEN
-    ) {
-    };
+    /** Isthmus bypass stub: custom SqlAggFunction identity routes through ADDITIONAL_AGGREGATE_SIGS → YAML extensions. */
+    private static SqlAggFunction localAggOp(String name, SqlReturnTypeInference returnType, SqlOperandTypeChecker operandTypes) {
+        return new SqlAggFunction(name, null, SqlKind.OTHER_FUNCTION, returnType, null, operandTypes,
+            SqlFunctionCategory.USER_DEFINED_FUNCTION, false, false, Optionality.FORBIDDEN) {
+        };
+    }
 
     /**
      * Maps aggregate operators to their Substrait extension names so isthmus serializes
@@ -400,6 +341,12 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
      */
     private static final List<FunctionMappings.Sig> ADDITIONAL_AGGREGATE_SIGS = List.of(
         FunctionMappings.s(SqlStdOperatorTable.APPROX_COUNT_DISTINCT, "approx_distinct"),
+        FunctionMappings.s(LOCAL_COUNT_OP, "count"),
+        FunctionMappings.s(LOCAL_AVG_OP, "avg"),
+        FunctionMappings.s(LOCAL_STDDEV_POP_OP, "stddev_pop"),
+        FunctionMappings.s(LOCAL_STDDEV_SAMP_OP, "stddev_samp"),
+        FunctionMappings.s(LOCAL_VAR_POP_OP, "var_pop"),
+        FunctionMappings.s(LOCAL_VAR_SAMP_OP, "var_samp"),
         FunctionMappings.s(LOCAL_TAKE_OP, "take"),
         FunctionMappings.s(LOCAL_FIRST_OP, "first_value"),
         FunctionMappings.s(LOCAL_LAST_OP, "last_value"),
@@ -432,6 +379,17 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
         // fragment has no StageInputScan leaves (shard-scan and Values cases).
         RelNode rewritten = rewriteStageInputScans(fragment);
         return convertToSubstrait(rewritten);
+    }
+
+    @Override
+    public byte[] convertShardMergeFragment(RelNode fragment) {
+        // Stamps INITIAL_TO_INTERMEDIATE phase on all aggregate measures so the
+        // Rust runtime strips the auto-inserted Final layer and ships Binary state.
+        RelNode rewritten = rewriteStageInputScans(fragment);
+        byte[] bytes = convertToSubstrait(rewritten);
+        Plan decoded = decodePlan(bytes);
+        Plan rephased = withAggregationPhaseRecursive(decoded, Expression.AggregationPhase.INITIAL_TO_INTERMEDIATE);
+        return serializePlan(rephased);
     }
 
     @Override
@@ -666,6 +624,36 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
             newMeasures.add(Aggregate.Measure.builder().from(m).function(rephased).build());
         }
         return Aggregate.builder().from(agg).measures(newMeasures).build();
+    }
+
+    /** Recursively overrides AggregationPhase on every Aggregate.Measure in the Plan tree. */
+    private static Plan withAggregationPhaseRecursive(Plan plan, Expression.AggregationPhase phase) {
+        RelCopyOnWriteVisitor<RuntimeException> visitor = new RelCopyOnWriteVisitor<>() {
+            @Override
+            public java.util.Optional<Rel> visit(Aggregate aggregate, io.substrait.util.EmptyVisitationContext context)
+                    throws RuntimeException {
+                java.util.Optional<Rel> recursed = super.visit(aggregate, context);
+                Rel base = recursed.orElse(aggregate);
+                Rel rephased = withAggregationPhase(base, phase);
+                return java.util.Optional.of(rephased);
+            }
+        };
+        List<io.substrait.plan.Plan.Root> newRoots = new ArrayList<>(plan.getRoots().size());
+        boolean changed = false;
+        io.substrait.util.EmptyVisitationContext ctx = io.substrait.util.EmptyVisitationContext.INSTANCE;
+        for (io.substrait.plan.Plan.Root root : plan.getRoots()) {
+            java.util.Optional<Rel> visited = root.getInput().accept(visitor, ctx);
+            if (visited.isPresent()) {
+                changed = true;
+                newRoots.add(io.substrait.plan.Plan.Root.builder().from(root).input(visited.get()).build());
+            } else {
+                newRoots.add(root);
+            }
+        }
+        if (!changed) {
+            return plan;
+        }
+        return io.substrait.plan.ImmutablePlan.builder().from(plan).roots(newRoots).build();
     }
 
     /**

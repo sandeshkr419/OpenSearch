@@ -366,7 +366,12 @@ public class FragmentConversionDriver {
                 return convertor.attachPartialAggOnTop(strippedAgg, innerBytes);
             }
 
+            // Detect SHARD_MERGE before strip (strip loses the mode marker).
+            boolean isShardMerge = containsShardMergeAggregate(resolvedFragment);
             RelNode stripped = strip(resolvedFragment, delegationBytes);
+            if (isShardMerge) {
+                return convertor.convertShardMergeFragment(stripped);
+            }
             return convertor.convertFragment(stripped);
         }
 
@@ -492,6 +497,19 @@ public class FragmentConversionDriver {
             return openSearchNode.stripAnnotations(strippedChildren, resolver);
         }
         return node;
+    }
+
+    /** Returns true if the tree contains an OpenSearchAggregate with SHARD_MERGE mode. */
+    private static boolean containsShardMergeAggregate(RelNode node) {
+        if (node instanceof OpenSearchAggregate agg && agg.getMode() == AggregateMode.SHARD_MERGE) {
+            return true;
+        }
+        for (RelNode input : node.getInputs()) {
+            if (containsShardMergeAggregate(input)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static RelNode findLeaf(RelNode node) {

@@ -12,12 +12,14 @@
 
 use datafusion::execution::context::SessionContext;
 
-pub mod internal_pattern;
 pub mod list_merge;
+pub mod state_shipping;
 pub mod take;
+pub mod internal_pattern;
 
 pub fn register_all(ctx: &SessionContext) {
     take::register_all(ctx);
     list_merge::register_all(ctx);
+    state_shipping::register_all(ctx);
     internal_pattern::register_all(ctx);
 }

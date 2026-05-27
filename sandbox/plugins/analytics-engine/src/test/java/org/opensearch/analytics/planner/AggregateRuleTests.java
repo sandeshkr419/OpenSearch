@@ -233,11 +233,11 @@ public class AggregateRuleTests extends BasePlannerRulesTests {
         PlannerContext context = buildContext("parquet", 1, intFields(), List.of(dfWithDelegation, luceneAccepting));
         RelNode result = runPlanner(makeMultiCallAggregate(sumCall(), stddevCall()), context);
         logger.info("Plan:\n{}", RelOptUtil.toString(result));
-        // OpenSearchAggregateReduceRule decomposes STDDEV_POP into SUM+COUNT wrapped in
-        // Project(sqrt) above / Project(squared-inputs) below the Aggregate.
+        // STDDEV_POP ships state on the wire (Binary IPC) as a single aggCall — no
+        // decomposition into SUM/COUNT. Plan skeleton: Aggregate ← Scan.
         assertPipelineViableBackends(
             result,
-            List.of(OpenSearchProject.class, OpenSearchAggregate.class, OpenSearchProject.class, OpenSearchTableScan.class),
+            List.of(OpenSearchAggregate.class, OpenSearchTableScan.class),
             Set.of(MockDataFusionBackend.NAME)
         );
     }

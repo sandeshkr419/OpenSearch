@@ -73,10 +73,9 @@ public class AggregatePlanShapeTests extends PlanShapeTestBase {
     }
 
     public void testStatsAvgByKey_2shard() {
-        // AVG is decomposed during the reduce phase into SUM/COUNT plus a Project
-        // computing the quotient. After split, FINAL receives reduced primitive aggs.
-        // Use AggregateCall.create with null type so Calcite infers AVG's canonical
-        // return type — passing an explicit type can drift from typeMatchesInferred.
+        // AVG ships state on the wire (Binary IPC of inner accumulator's (sum, count)),
+        // not decomposed into SUM/COUNT. After split, both PARTIAL and FINAL aggregates
+        // carry the AVG aggCall; coord-side merge is engine-native (reducer == self).
         RelNode scan = stubScan(mockTable("test_index", "status", "size"));
         AggregateCall avg = AggregateCall.create(
             SqlStdOperatorTable.AVG,
@@ -95,17 +94,14 @@ public class AggregatePlanShapeTests extends PlanShapeTestBase {
         );
         RelNode plan = LogicalAggregate.create(scan, List.of(), ImmutableBitSet.of(0), null, List.of(avg));
         RelNode result = runPlanner(plan, multiShardContext());
-        // Project on top performs CAST(SUM(x) / COUNT()) back to AVG's declared return type.
-        // COUNT here has no field operand because the inferred AVG decomposition produces a
-        // bare COUNT (counts all rows in the group, equivalent to COUNT(x) when x is not nullable).
-        // Skeleton: Project ← FINAL(SUM,COUNT) ← ER ← PARTIAL(SUM,COUNT) ← Scan.
+        // Skeleton: FINAL(AVG) ← ER ← PARTIAL(AVG) ← Scan. No Project — AVG returns
+        // its user-facing scalar directly (the FINAL's evaluate consumes Binary state).
         assertPlanShape(
             """
-                OpenSearchProject(status=[$0], avg_size=[ANNOTATED_PROJECT_EXPR(id=3, backends=[mock-parquet], CAST(ANNOTATED_PROJECT_EXPR(id=2, backends=[mock-parquet], /($1, $2))):INTEGER NOT NULL)], viableBackends=[[mock-parquet]])
-                  OpenSearchAggregate(group=[{0}], agg#0=[SUM($1)], agg#1=[COUNT()], mode=[FINAL], viableBackends=[[mock-parquet]])
-                    OpenSearchExchangeReducer(viableBackends=[[mock-parquet]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
-                      OpenSearchAggregate(group=[{0}], agg#0=[SUM($1)], agg#1=[COUNT()], mode=[PARTIAL], viableBackends=[[mock-parquet]])
-                        OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
+                OpenSearchAggregate(group=[{0}], avg_size=[AVG($1)], mode=[FINAL], viableBackends=[[mock-parquet]])
+                  OpenSearchExchangeReducer(viableBackends=[[mock-parquet]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
+                    OpenSearchAggregate(group=[{0}], avg_size=[AVG($1)], mode=[PARTIAL], viableBackends=[[mock-parquet]])
+                      OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
                 """,
             result
         );
