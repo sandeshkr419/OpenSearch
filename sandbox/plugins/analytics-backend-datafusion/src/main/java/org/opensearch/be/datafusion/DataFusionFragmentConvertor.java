@@ -416,6 +416,27 @@ public class DataFusionFragmentConvertor implements FragmentConvertor {
     }
 
     /**
+     * Symmetric counterpart of {@link #attachPartialAggOnTop} — wraps {@code innerBytes}
+     * with the FINAL aggregate at phase {@code INTERMEDIATE_TO_RESULT} so DataFusion's
+     * substrait consumer plans a merge-only aggregator on the gathered state.
+     */
+    @Override
+    public byte[] attachFinalAggOnTop(RelNode finalAggFragment, byte[] innerBytes) {
+        LOGGER.debug("Attaching final aggregate on top of {} inner bytes", innerBytes.length);
+        Plan inner = decodePlan(innerBytes);
+        // FINAL agg's child is OpenSearchStageInputScan — rewrite to TableScan so isthmus
+        // can serialize the wrapper subtree. The child gets replaced via rewire.
+        RelNode rewritten = rewriteStageInputScans(finalAggFragment);
+        Rel wrapper = convertStandalone(rewritten);
+        Plan rewired = rewire(
+            inner,
+            withAggregationPhase(wrapper, Expression.AggregationPhase.INTERMEDIATE_TO_RESULT),
+            fieldNames(finalAggFragment)
+        );
+        return serializePlan(SubstraitPlanPojoRewriter.rewrite(rewired));
+    }
+
+    /**
      * Builds a schema-only stub plan directly via Substrait protos — no isthmus, no
      * Calcite RelNode round-trip. Output:
      * <pre>

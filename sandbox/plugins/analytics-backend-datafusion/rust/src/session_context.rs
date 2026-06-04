@@ -401,9 +401,14 @@ pub async fn prepare_partial_plan(
     let logical_plan = from_substrait_plan(&handle.ctx.state(), &plan).await?;
     let dataframe = handle.ctx.execute_logical_plan(logical_plan).await?;
     let physical_plan = dataframe.create_physical_plan().await?;
-    let target_schema = crate::schema_coerce::coerce_inferred_schema(physical_plan.schema());
-    let physical_plan = crate::relabel_exec::wrap_if_relabel_needed(physical_plan, target_schema)?;
     let stripped = crate::agg_mode::apply_aggregate_mode(physical_plan, crate::agg_mode::Mode::Partial)?;
+    // Rename DataFusion's state-suffixed AggregateExec(Partial) outputs (e.g. `v[hll_registers]`)
+    // back to the user-facing alias (`v`) so the wire matches the FINAL substrait declaration.
+    let stripped = crate::agg_mode::wrap_with_user_facing_names(stripped)?;
+    // Coerce + relabel must run AFTER strip — RelabelExec's target_schema is locked to the
+    // pre-strip output and would clash with the post-strip state schema.
+    let target_schema = crate::schema_coerce::coerce_inferred_schema(stripped.schema());
+    let stripped = crate::relabel_exec::wrap_if_relabel_needed(stripped, target_schema)?;
     handle.prepared_plan = Some(stripped);
     Ok(())
 }

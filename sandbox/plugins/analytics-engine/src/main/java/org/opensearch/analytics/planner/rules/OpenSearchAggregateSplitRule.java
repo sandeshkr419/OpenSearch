@@ -56,12 +56,13 @@ public class OpenSearchAggregateSplitRule extends RelOptRule {
     /** Skip the PARTIAL/FINAL split when it would emit a row type that fails Volcano's typeMatchesInferred. */
     private static boolean shouldSkipPartialFinalSplit(OpenSearchAggregate aggregate) {
         for (AggregateCall aggCall : aggregate.getAggCallList()) {
-            // Aggregates that don't decompose additively across shards: APPROXIMATE
-            // (APPROX_COUNT_DISTINCT), STATE_EXPANDING (TAKE/FIRST/LAST/LIST/VALUES/
-            // PERCENTILE_APPROX/PATTERN), and any residual DISTINCT (e.g. multi-arg
-            // COUNT(DISTINCT a, b) that survived rewriting). Gather and aggregate once.
+            // STATE_EXPANDING (TAKE / FIRST / LAST / LIST / VALUES / PERCENTILE_APPROX / PATTERN)
+            // and any residual DISTINCT (e.g. multi-arg COUNT(DISTINCT a, b)) cannot use the
+            // additive PARTIAL→reducer→FINAL split — gather and aggregate once at the coordinator.
+            // APPROXIMATE (APPROX_COUNT_DISTINCT) takes the split: data nodes emit per-shard HLL
+            // sketches and the coordinator merges them via INTERMEDIATE_TO_RESULT phase.
             AggregateFunction.Type type = aggregateType(aggCall.getAggregation());
-            if (type == AggregateFunction.Type.STATE_EXPANDING || type == AggregateFunction.Type.APPROXIMATE) {
+            if (type == AggregateFunction.Type.STATE_EXPANDING) {
                 return true;
             }
             if (aggCall.isDistinct()) {

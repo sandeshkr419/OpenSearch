@@ -245,6 +245,49 @@ public class FragmentConversionDriverTests extends BasePlannerRulesTests {
     }
 
     /**
+     * Regression: APPROX_COUNT_DISTINCT in a multi-shard plan must split into PARTIAL/FINAL and
+     * the PARTIAL stage must emit {@code SETUP_PARTIAL_AGGREGATE} after {@code SETUP_SHARD_SCAN}.
+     * The instruction tells the data node to strip its physical plan to {@code Mode::Partial} so
+     * per-shard HLL sketches go on the wire instead of the user-facing scalar. Without it, dc
+     * silently falls back to over-counting / single-stage gather.
+     */
+    public void testTwoStageApproxCountDistinct_emitsPartialAggregateInstruction() {
+        RecordingConvertor convertor = new RecordingConvertor();
+        RelNode scan = stubScan(mockTable("test_index", "status", "size"));
+        QueryDAG dag = buildAndConvert(2, makeAggregate(scan, approxCountDistinctCall(scan)), convertor);
+
+        assertEquals(1, dag.rootStage().getChildStages().size());
+        Stage partialStage = dag.rootStage().getChildStages().getFirst();
+        assertEquals("expected exactly one alternative", 1, partialStage.getPlanAlternatives().size());
+        StagePlan plan = partialStage.getPlanAlternatives().getFirst();
+        assertEquals("first instruction must be SHARD_SCAN", InstructionType.SETUP_SHARD_SCAN, plan.instructions().getFirst().type());
+        assertTrue(
+            "PARTIAL stage with APPROX_COUNT_DISTINCT measure must emit SETUP_PARTIAL_AGGREGATE",
+            plan.instructions().stream().anyMatch(node -> node.type() == InstructionType.SETUP_PARTIAL_AGGREGATE)
+        );
+        // FINAL stage on coord goes through attachFinalAggOnTop (RecordingConvertor records it
+        // as finalAggCalled=true).
+        assertReduceStageConverted(convertor, dag.rootStage());
+    }
+
+    /**
+     * Limited-blast-radius gate: SUM (and other non-engine-native-merge measures) must NOT
+     * emit {@code SETUP_PARTIAL_AGGREGATE} — the existing Partial+Final default-execution
+     * path already handles them.
+     */
+    public void testTwoStageSum_doesNotEmitPartialAggregateInstruction() {
+        RecordingConvertor convertor = new RecordingConvertor();
+        QueryDAG dag = buildAndConvert(2, makeAggregate(sumCall()), convertor);
+
+        Stage partialStage = dag.rootStage().getChildStages().getFirst();
+        StagePlan plan = partialStage.getPlanAlternatives().getFirst();
+        assertFalse(
+            "PARTIAL stage without engine-native-merge measure must NOT emit SETUP_PARTIAL_AGGREGATE",
+            plan.instructions().stream().anyMatch(node -> node.type() == InstructionType.SETUP_PARTIAL_AGGREGATE)
+        );
+    }
+
+    /**
      * Multi-shard Sort(Aggregate(Filter(Scan))) with limit — full OLAP pipeline, two stages.
      */
     public void testTwoStageSortOnAggregateOnFilteredScan() {

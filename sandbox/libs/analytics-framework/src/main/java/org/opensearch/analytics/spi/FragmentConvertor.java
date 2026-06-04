@@ -24,7 +24,8 @@ import org.apache.calcite.rel.type.RelDataType;
  * <ol>
  *   <li>{@code convertFragment(Filter(Scan))} → data node inner bytes</li>
  *   <li>{@code attachPartialAggOnTop(PartialAgg, innerBytes)} → data node bytes</li>
- *   <li>{@code convertFragment(FinalAgg(StageInputScan))} → reduce stage inner bytes</li>
+ *   <li>{@code convertFragment(StageInputScan)} → reduce stage inner bytes</li>
+ *   <li>{@code attachFinalAggOnTop(FinalAgg, innerBytes)} → reduce stage agg bytes</li>
  *   <li>{@code attachFragmentOnTop(Sort, innerBytes)} → reduce stage bytes</li>
  * </ol>
  *
@@ -68,6 +69,20 @@ public interface FragmentConvertor {
      */
     default byte[] attachPartialAggOnTop(RelNode partialAggFragment, byte[] innerBytes) {
         throw new UnsupportedOperationException("attachPartialAggOnTop not implemented for this backend");
+    }
+
+    /**
+     * Attaches a final aggregate on top of already-converted inner bytes (typically the
+     * coordinator stage's {@code StageInputScan} read of the gathered partition). Symmetric
+     * counterpart of {@link #attachPartialAggOnTop} — the backend wraps the inner plan with
+     * the FINAL aggregate operator and configures it for state-merge execution.
+     *
+     * @param finalAggFragment the FINAL aggregate RelNode (annotations stripped, child is the inner)
+     * @param innerBytes       serialized bytes from a prior {@link #convertFragment} call
+     * @return serialized plan bytes with the FINAL aggregate attached on top
+     */
+    default byte[] attachFinalAggOnTop(RelNode finalAggFragment, byte[] innerBytes) {
+        throw new UnsupportedOperationException("attachFinalAggOnTop not implemented for this backend");
     }
 
     /**

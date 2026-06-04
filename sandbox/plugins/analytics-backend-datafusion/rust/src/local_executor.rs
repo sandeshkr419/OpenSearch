@@ -183,9 +183,18 @@ impl LocalSession {
         let plan = Plan::decode(bytes).map_err(|e| {
             DataFusionError::Execution(format!("Failed to decode Substrait plan: {}", e))
         })?;
+        // Engine-native-merge stages mark each measure with INTERMEDIATE_TO_RESULT (set by
+        // attachFinalAggOnTop). DataFusion's substrait consumer ignores phase, so strip the
+        // Partial half here to keep merge-only execution on the gathered state.
+        let needs_final_strip = has_intermediate_to_result_measure(&plan);
         let logical_plan = from_substrait_plan(&self.ctx.state(), &plan).await?;
         let dataframe = self.ctx.execute_logical_plan(logical_plan).await?;
         let physical_plan = dataframe.create_physical_plan().await?;
+        let physical_plan = if needs_final_strip {
+            crate::agg_mode::apply_aggregate_mode(physical_plan, crate::agg_mode::Mode::Final)?
+        } else {
+            physical_plan
+        };
         let target_schema = crate::schema_coerce::coerce_inferred_schema(physical_plan.schema());
         let physical_plan = crate::relabel_exec::wrap_if_relabel_needed(physical_plan, target_schema)?;
         datafusion::physical_plan::execute_stream(physical_plan, self.ctx.task_ctx())
@@ -242,6 +251,45 @@ impl LocalSession {
             .expect("execute_prepared called without a prepared plan");
         datafusion::physical_plan::execute_stream(Arc::clone(plan), self.ctx.task_ctx())
     }
+}
+
+/// True when any aggregate Measure in the substrait plan declares
+/// `phase=INTERMEDIATE_TO_RESULT` — set by `attachFinalAggOnTop` to mark
+/// engine-native merge stages.
+fn has_intermediate_to_result_measure(plan: &substrait::proto::Plan) -> bool {
+    use substrait::proto::AggregationPhase;
+    use substrait::proto::rel::RelType;
+    fn walk(rel: &substrait::proto::Rel) -> bool {
+        match rel.rel_type.as_ref() {
+            Some(RelType::Aggregate(agg)) => {
+                if agg
+                    .measures
+                    .iter()
+                    .any(|m| {
+                        m.measure
+                            .as_ref()
+                            .map(|f| f.phase == AggregationPhase::IntermediateToResult as i32)
+                            .unwrap_or(false)
+                    })
+                {
+                    return true;
+                }
+                agg.input.as_ref().map(|i| walk(i)).unwrap_or(false)
+            }
+            Some(RelType::Filter(f)) => f.input.as_ref().map(|i| walk(i)).unwrap_or(false),
+            Some(RelType::Project(p)) => p.input.as_ref().map(|i| walk(i)).unwrap_or(false),
+            Some(RelType::Sort(s)) => s.input.as_ref().map(|i| walk(i)).unwrap_or(false),
+            Some(RelType::Fetch(f)) => f.input.as_ref().map(|i| walk(i)).unwrap_or(false),
+            _ => false,
+        }
+    }
+    plan.relations.iter().any(|pr| match &pr.rel_type {
+        Some(substrait::proto::plan_rel::RelType::Root(root)) => {
+            root.input.as_ref().map(|i| walk(i)).unwrap_or(false)
+        }
+        Some(substrait::proto::plan_rel::RelType::Rel(rel)) => walk(rel),
+        None => false,
+    })
 }
 
 #[cfg(test)]

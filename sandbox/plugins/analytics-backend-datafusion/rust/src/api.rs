@@ -1116,6 +1116,7 @@ fn derive_schema_from_partial_plan(
     let state = SessionStateBuilder::new()
         .with_config(SessionConfig::new())
         .with_default_features()
+        .with_physical_optimizer_rules(crate::agg_mode::physical_optimizer_rules_without_combine())
         .build();
     let ctx = SessionContext::new_with_state(state);
     crate::udf::register_all(&ctx);
@@ -1174,6 +1175,10 @@ fn derive_schema_from_partial_plan(
 
     let logical_plan = futures::executor::block_on(from_substrait_plan(&session_state, &plan))?;
     let physical_plan = futures::executor::block_on(session_state.create_physical_plan(&logical_plan))?;
+    // Mirror data node's prepare_partial_plan so the registered StreamingTable schema
+    // matches the per-shard sketch state actually emitted on the wire.
+    let physical_plan = crate::agg_mode::apply_aggregate_mode(physical_plan, crate::agg_mode::Mode::Partial)?;
+    let physical_plan = crate::agg_mode::wrap_with_user_facing_names(physical_plan)?;
     Ok(crate::schema_coerce::coerce_inferred_schema(physical_plan.schema()))
 }
 

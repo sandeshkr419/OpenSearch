@@ -56,6 +56,13 @@ public class RecordingConvertor implements FragmentConvertor {
     }
 
     @Override
+    public byte[] attachFinalAggOnTop(RelNode finalAggFragment, byte[] innerBytes) {
+        this.finalAggCalled = true;
+        this.reduceFragment = finalAggFragment;
+        return ("finalAgg:" + new String(innerBytes, StandardCharsets.UTF_8)).getBytes(StandardCharsets.UTF_8);
+    }
+
+    @Override
     public byte[] convertSchemaOnlyRead(int stageId, RelDataType schema) {
         return ("schemaOnlyRead:" + stageId).getBytes(StandardCharsets.UTF_8);
     }

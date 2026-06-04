@@ -212,6 +212,49 @@ public class DataFusionFragmentConvertorTests extends OpenSearchTestCase {
     }
 
     /**
+     * Attaching a final aggregate on top of inner bytes yields an
+     * {@code AggregateRel(readRel)} with phase INTERMEDIATE_TO_RESULT — the marker that tells
+     * DataFusion to call {@code merge_batch} on gathered intermediate state.
+     */
+    public void testAttachFinalAggOnTop_PhaseIntermediateToResult() throws Exception {
+        DataFusionFragmentConvertor convertor = newConvertor();
+
+        // Inner = StageInputScan-rooted "read" of the gathered partition.
+        RelDataType stageRowType = rowType("A");
+        int childStageId = 0;
+        RelNode stageInput = new OpenSearchStageInputScan(
+            cluster,
+            cluster.traitSet(),
+            childStageId,
+            stageRowType,
+            List.of("datafusion"),
+            List.of()
+        );
+        byte[] innerBytes = convertor.convertFragment(stageInput);
+
+        // FINAL aggregate fragment over the StageInputScan (sum is a stand-in — phase
+        // override is set unconditionally regardless of measure type).
+        LogicalAggregate finalAgg = buildSumAggregate(stageInput, 0);
+
+        byte[] combined = convertor.attachFinalAggOnTop(finalAgg, innerBytes);
+
+        Plan plan = decodeSubstrait(combined);
+        Rel root = rootRel(plan);
+        assertTrue("root must be an AggregateRel", root.hasAggregate());
+        AggregateRel agg = root.getAggregate();
+        assertFalse("aggregate must have at least one measure", agg.getMeasuresList().isEmpty());
+        AggregateFunction fn = agg.getMeasures(0).getMeasure();
+        assertEquals(
+            "final-agg phase must be INTERMEDIATE_TO_RESULT",
+            AggregationPhase.AGGREGATION_PHASE_INTERMEDIATE_TO_RESULT,
+            fn.getPhase()
+        );
+        Rel inner = agg.getInput();
+        assertTrue("Aggregate input must be a ReadRel", inner.hasRead());
+        assertEquals(List.of("input-" + childStageId), inner.getRead().getNamedTable().getNamesList());
+    }
+
+    /**
      * A final-agg fragment whose leaf is an {@link OpenSearchStageInputScan}
      * converts to {@code AggregateRel(ReadRel(namedTable=["input-<childStageId>"]))}.
      * The stage-input id is per-child so multi-input shapes (Union) get distinct names

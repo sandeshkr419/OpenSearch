@@ -161,4 +161,42 @@ public class AggregatePlanShapeTests extends PlanShapeTestBase {
             result
         );
     }
+
+    // ---- APPROX_COUNT_DISTINCT (engine-native sketch merge) ----
+
+    /**
+     * APPROX_COUNT_DISTINCT, 1-shard: runs as SINGLE at the shard, no split. Mirrors the
+     * shape SUM/COUNT take in 1-shard plans.
+     */
+    public void testApproxCountDistinct_1shard() {
+        RelNode scan = stubScan(mockTable("test_index", "status", "size"));
+        RelNode plan = makeAggregate(scan, approxCountDistinctCall(scan));
+        RelNode result = runPlanner(plan, singleShardContext());
+        assertPlanShape("""
+            OpenSearchAggregate(group=[{0}], dc=[APPROX_COUNT_DISTINCT($1)], mode=[SINGLE], viableBackends=[[mock-parquet]])
+              OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
+            """, result);
+    }
+
+    /**
+     * Regression for distributed sketch-merge: APPROX_COUNT_DISTINCT must take the structural
+     * PARTIAL/FINAL split. FINAL keeps the APPROX_COUNT_DISTINCT operator (engine-native merge)
+     * and reads column $1 of the gathered exchange — {@code DistributedAggregateRewriter} retypes
+     * that column to VARBINARY (HLL sketch). If this regresses to SINGLE over an ExchangeReducer,
+     * the coordinator gathers all rows and dc latency reverts to the pre-distributed-merge baseline.
+     */
+    public void testApproxCountDistinct_2shard() {
+        RelNode scan = stubScan(mockTable("test_index", "status", "size"));
+        RelNode plan = makeAggregate(scan, approxCountDistinctCall(scan));
+        RelNode result = runPlanner(plan, multiShardContext());
+        assertPlanShape(
+            """
+                OpenSearchAggregate(group=[{0}], dc=[APPROX_COUNT_DISTINCT($1)], mode=[FINAL], viableBackends=[[mock-parquet]])
+                  OpenSearchExchangeReducer(viableBackends=[[mock-parquet]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
+                    OpenSearchAggregate(group=[{0}], dc=[APPROX_COUNT_DISTINCT($1)], mode=[PARTIAL], viableBackends=[[mock-parquet]])
+                      OpenSearchTableScan(table=[[test_index]], viableBackends=[[mock-parquet]])
+                """,
+            result
+        );
+    }
 }

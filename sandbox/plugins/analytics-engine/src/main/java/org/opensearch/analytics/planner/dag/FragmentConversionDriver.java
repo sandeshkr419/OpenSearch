@@ -242,8 +242,29 @@ public class FragmentConversionDriver {
             } else {
                 factory.createShardScanNode(requestsRowIds).ifPresent(instructions::add);
             }
+            // Engine-native-merge PARTIAL stages (APPROX_COUNT_DISTINCT) need the data node
+            // to strip its plan to Mode::Partial so it emits sketch state on the wire.
+            if (plan.resolvedFragment() instanceof OpenSearchAggregate agg
+                && agg.getMode() == AggregateMode.PARTIAL
+                && hasEngineNativeMergeMeasure(agg)) {
+                factory.createPartialAggregateNode().ifPresent(instructions::add);
+            }
         }
         return instructions;
+    }
+
+    private static boolean hasEngineNativeMergeMeasure(OpenSearchAggregate aggregate) {
+        for (org.apache.calcite.rel.core.AggregateCall call : aggregate.getAggCallList()) {
+            try {
+                if (org.opensearch.analytics.spi.AggregateFunction.fromSqlAggFunction(call.getAggregation())
+                    .getType() == org.opensearch.analytics.spi.AggregateFunction.Type.APPROXIMATE) {
+                    return true;
+                }
+            } catch (IllegalStateException ignored) {
+                // Unknown operator — treat as not engine-native-merge.
+            }
+        }
+        return false;
     }
 
     /**
@@ -473,6 +494,13 @@ public class FragmentConversionDriver {
                         finalAggInputs.add(strip(input.getInputs().getFirst(), delegationBytes));
                     }
                     RelNode finalAggFragment = openSearchNode.stripAnnotations(finalAggInputs, resolver);
+                    // FINAL aggregate boundary: split into convertFragment(StageInputScan) +
+                    // attachFinalAggOnTop(FinalAgg) — symmetric with the data-node side's
+                    // convertFragment(inner) + attachPartialAggOnTop(PartialAgg).
+                    if (openSearchNode instanceof OpenSearchAggregate finalAgg && finalAgg.getMode() == AggregateMode.FINAL) {
+                        byte[] innerBytes = convertor.convertFragment(finalAggInputs.getFirst());
+                        return convertor.attachFinalAggOnTop(finalAggFragment, innerBytes);
+                    }
                     return convertor.convertFragment(finalAggFragment);
                 }
 

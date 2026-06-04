@@ -14,8 +14,11 @@ use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFin
 use datafusion::physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule};
 use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion_common::Result;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -49,13 +52,16 @@ pub(crate) fn apply_aggregate_mode(
 }
 
 /// Walks the plan tree and strips the half that doesn't match `target`.
+///
+/// Recurses through any wrapper (Project / Repartition / Coalesce / Relabel / etc.) by
+/// rebuilding it with stripped children — only AggregateExec nodes trigger the strip
+/// logic. Treats `FinalPartitioned`/`SinglePartitioned` as Final/Single variants.
 fn force_aggregate_mode(
     plan: Arc<dyn ExecutionPlan>,
     target: AggregateMode,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if let Some(agg) = plan.as_any().downcast_ref::<AggregateExec>() {
-        if *agg.mode() == target {
-            // Keep this node, recurse into children
+        if mode_matches_target(*agg.mode(), target) {
             let new_children: Vec<Arc<dyn ExecutionPlan>> = agg
                 .children()
                 .into_iter()
@@ -63,40 +69,46 @@ fn force_aggregate_mode(
                 .collect::<Result<_>>()?;
             return plan.with_new_children(new_children);
         }
-        // Mode mismatch — strip this node
+        // Mode mismatch — strip this AggregateExec.
         match target {
             AggregateMode::Partial => {
-                // Current node is Final; find the Partial subtree below
                 if let Some(partial_subtree) = find_partial_input(Arc::clone(agg.input())) {
                     return Ok(partial_subtree);
                 }
-                // If no Partial found below, the input itself is the Partial
+                // Single mode — return the input scan unchanged.
                 Ok(Arc::clone(agg.input()))
             }
-            AggregateMode::Final => {
-                // Current node is Partial; skip it, return its child
-                // (the Final above will keep itself)
+            AggregateMode::Final | AggregateMode::FinalPartitioned => {
+                // Skip the Partial node, recurse into its child.
                 let child = agg.children()[0];
                 force_aggregate_mode(Arc::clone(child), target)
             }
             _ => Ok(plan),
         }
-    } else if plan.as_any().downcast_ref::<RepartitionExec>().is_some()
-        || plan
-            .as_any()
-            .downcast_ref::<CoalescePartitionsExec>()
-            .is_some()
-    {
-        // Transparent — recurse through
-        let new_children: Vec<Arc<dyn ExecutionPlan>> = plan
-            .children()
+    } else {
+        // Non-aggregate node — recurse, rebuilding with stripped children.
+        let children = plan.children();
+        if children.is_empty() {
+            return Ok(plan);
+        }
+        let new_children: Vec<Arc<dyn ExecutionPlan>> = children
             .into_iter()
             .map(|c| force_aggregate_mode(Arc::clone(c), target))
             .collect::<Result<_>>()?;
         plan.with_new_children(new_children)
-    } else {
-        // Leaf or unrelated node — return as-is
-        Ok(plan)
+    }
+}
+
+/// `Final`/`FinalPartitioned` are the two flavours of "finalize partial state";
+/// `Single`/`SinglePartitioned` are the two flavours of "compute end-to-end".
+fn mode_matches_target(mode: AggregateMode, target: AggregateMode) -> bool {
+    match (mode, target) {
+        (a, b) if a == b => true,
+        (AggregateMode::FinalPartitioned, AggregateMode::Final)
+        | (AggregateMode::Final, AggregateMode::FinalPartitioned) => true,
+        (AggregateMode::SinglePartitioned, AggregateMode::Single)
+        | (AggregateMode::Single, AggregateMode::SinglePartitioned) => true,
+        _ => false,
     }
 }
 
@@ -122,6 +134,33 @@ fn find_partial_input(plan: Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionP
         }
     }
     None
+}
+
+/// Wraps `plan` with a `ProjectionExec` that renames any state-suffixed column
+/// (`<alias>[<state_field>]`) back to its user-facing alias. No-op when no column
+/// has a `[…]` suffix.
+pub(crate) fn wrap_with_user_facing_names(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let schema = plan.schema();
+    let needs_rename = schema.fields().iter().any(|f| f.name().contains('['));
+    if !needs_rename {
+        return Ok(plan);
+    }
+    let exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            let name = f.name();
+            let user = match name.find('[') {
+                Some(idx) => name[..idx].to_string(),
+                None => name.clone(),
+            };
+            (Arc::new(Column::new(name, i)) as Arc<dyn PhysicalExpr>, user)
+        })
+        .collect();
+    Ok(Arc::new(ProjectionExec::try_new(exprs, plan)?))
 }
 
 #[cfg(test)]

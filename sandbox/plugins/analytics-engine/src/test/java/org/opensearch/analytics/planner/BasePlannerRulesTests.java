@@ -497,6 +497,19 @@ public abstract class BasePlannerRulesTests extends OpenSearchTestCase {
         );
     }
 
+    /** APPROX_COUNT_DISTINCT over the second column — engine-native-merge shape used by dc/distinct_count. */
+    protected AggregateCall approxCountDistinctCall(RelNode input) {
+        return AggregateCall.create(
+            SqlStdOperatorTable.APPROX_COUNT_DISTINCT,
+            false,
+            List.of(1),
+            -1,
+            input,
+            typeFactory.createSqlType(SqlTypeName.BIGINT),
+            "dc"
+        );
+    }
+
     /**
      * AVG over the second column. Uses the long-form {@link AggregateCall#create} with a
      * {@code null} return type so Calcite infers AVG's canonical type; the short-form
