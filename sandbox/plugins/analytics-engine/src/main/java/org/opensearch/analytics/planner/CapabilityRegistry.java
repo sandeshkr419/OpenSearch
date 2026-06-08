@@ -239,6 +239,21 @@ public class CapabilityRegistry {
         return result;
     }
 
+    /**
+     * Backends that can filter on this field via its <b>doc-value</b> formats only (excludes the
+     * index path). Used to keep a predicate on the driving engine (doc-value-backed, e.g. DataFusion)
+     * while dropping an index-path backend (e.g. Lucene) — e.g. a leading-wildcard LIKE that would be
+     * a full term-dictionary sweep on the inverted index.
+     */
+    public List<String> filterBackendsByDocValues(ScalarFunction function, FieldStorageInfo field) {
+        FieldType fieldType = field.getFieldType();
+        List<String> result = new ArrayList<>();
+        for (String format : field.getDocValueFormats()) {
+            result.addAll(filterBackends(function, fieldType, format));
+        }
+        return result;
+    }
+
     /** All backends that can aggregate on this field across all its storage formats. */
     public List<String> aggregateBackendsForField(AggregateFunction function, FieldStorageInfo field) {
         FieldType fieldType = field.getFieldType();

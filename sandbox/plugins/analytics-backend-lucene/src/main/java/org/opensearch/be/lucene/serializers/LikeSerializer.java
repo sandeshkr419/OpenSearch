@@ -60,12 +60,6 @@ public class LikeSerializer extends AbstractQuerySerializer {
         }
 
         FieldStorageInfo field = FieldStorageInfo.resolve(fieldStorage, columnRef.getIndex());
-        // Route to the field's exact-match subfield when it has one (a text field's .keyword): a
-        // wildcard over the raw keyword term is the valid superset, whereas a wildcard over the
-        // analyzed text field is not. Marking only delegates text LIKE when this subfield exists.
-        String fieldName = field.getExactMatchSubfield() != null
-            ? field.getFieldName() + "." + field.getExactMatchSubfield()
-            : field.getFieldName();
         Object patternValue = CalciteToOSMapperConversionUtils.literalToOpenSearchValue(patternLit);
         if (patternValue == null) {
             throw new IllegalArgumentException("LIKE pattern must be a non-null literal");
@@ -74,11 +68,21 @@ public class LikeSerializer extends AbstractQuerySerializer {
         boolean caseInsensitive = operator instanceof SqlLikeOperator likeOp && !likeOp.isCaseSensitive();
 
         if (SqlLikePattern.classify(pattern) == SqlLikePattern.Shape.PREFIX) {
-            PrefixQueryBuilder qb = new PrefixQueryBuilder(fieldName, SqlLikePattern.prefixLiteral(pattern));
+            // PREFIX 'p%' → term-dictionary prefix seek. Route to the exact-match (keyword) subfield
+            // when present (text field); else the field itself (keyword family). Marking guarantees one holds.
+            String prefixField = field.getExactMatchSubfield() != null
+                ? field.getFieldName() + "." + field.getExactMatchSubfield()
+                : field.getFieldName();
+            PrefixQueryBuilder qb = new PrefixQueryBuilder(prefixField, SqlLikePattern.prefixLiteral(pattern));
             qb.caseInsensitive(caseInsensitive);
             return qb;
         }
-        WildcardQueryBuilder qb = new WildcardQueryBuilder(fieldName, convertSqlWildcardToLucene(pattern));
+        // GENERAL (leading-wildcard) → route to the trigram wildcard subfield. Marking only delegates
+        // this shape when a substring-match subfield exists, so it is non-null here.
+        String wildcardField = field.getSubstringMatchSubfield() != null
+            ? field.getFieldName() + "." + field.getSubstringMatchSubfield()
+            : field.getFieldName();
+        WildcardQueryBuilder qb = new WildcardQueryBuilder(wildcardField, convertSqlWildcardToLucene(pattern));
         qb.caseInsensitive(caseInsensitive);
         return qb;
     }

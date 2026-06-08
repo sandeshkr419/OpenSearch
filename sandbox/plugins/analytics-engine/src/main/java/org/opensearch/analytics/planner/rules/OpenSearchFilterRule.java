@@ -14,6 +14,7 @@ import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Filter;
 import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexInputRef;
+import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.sql.SqlKind;
 import org.apache.logging.log4j.LogManager;
@@ -29,6 +30,7 @@ import org.opensearch.analytics.spi.DelegationType;
 import org.opensearch.analytics.spi.FieldStorageInfo;
 import org.opensearch.analytics.spi.FieldType;
 import org.opensearch.analytics.spi.ScalarFunction;
+import org.opensearch.analytics.spi.SqlLikePattern;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -199,17 +201,18 @@ public class OpenSearchFilterRule extends RelOptRule {
                 // TODO: for FULL_TEXT operators, extract required params from RexCall
                 fieldViable = new HashSet<>(registry.filterBackendsForField(function, storageInfo));
 
-                // LIKE on an analyzed TEXT field is only a valid delegated superset when the field has
-                // a keyword exact-match subfield to route the wildcard to (see LikeSerializer); on a
-                // bare text field a per-token wildcard under-matches and can fail in the scan path.
-                // Drop FILTER-delegation acceptors (e.g. Lucene) for that case so the predicate stays
-                // on the driving engine. Keyword fields and text-with-subfield are unaffected.
-                // TODO: support LIKE delegation for pure-text fields WITHOUT a keyword subfield (e.g.
-                // via an ngram/analyzed-aware Lucene query) so they don't fall back to DataFusion.
-                if (function == ScalarFunction.LIKE
-                    && FieldType.text().contains(storageInfo.getFieldType())
-                    && storageInfo.getExactMatchSubfield() == null) {
-                    fieldViable.removeAll(registry.delegationAcceptors(DelegationType.FILTER));
+                // LIKE delegation is shape- and index-aware. When Lucene has no efficient + correct
+                // index for the pattern shape, restrict viability to the field's doc-value backends
+                // (the driving engine, e.g. DataFusion), dropping the index-path backend (Lucene):
+                // - PREFIX ('p%') → needs an exact-anchored term: keyword field directly, or a
+                // text field's keyword exact-match subfield (analyzed text
+                // matches per-token, which is wrong).
+                // - GENERAL ('%x%','%x') → leading wildcard. On a plain term dictionary this is a full
+                // dictionary sweep (the LIKE-on-URL regression). Only delegate
+                // when the field has a trigram wildcard subfield to route to.
+                // Otherwise the predicate stays native on the driving engine.
+                if (function == ScalarFunction.LIKE && !likeDelegationViable(predicate, storageInfo)) {
+                    fieldViable.retainAll(registry.filterBackendsByDocValues(function, storageInfo));
                 }
             }
 
@@ -290,6 +293,46 @@ public class OpenSearchFilterRule extends RelOptRule {
             );
         }
         return new ArrayList<>(viableSet);
+    }
+
+    /**
+     * Whether a LIKE predicate on {@code field} can be delegated to Lucene as an efficient, correct
+     * superset, based on the pattern shape and the field's available subfields:
+     * <ul>
+     *   <li><b>PREFIX</b> ({@code 'p%'}) → a term-dictionary prefix seek. Viable on a keyword-family
+     *       field directly, or on a text field via its keyword exact-match subfield (analyzed text
+     *       would match per-token, which is wrong).</li>
+     *   <li><b>GENERAL</b> ({@code '%x'}, {@code '%x%'}) → a leading wildcard. On a plain term
+     *       dictionary this is a full-dictionary sweep, so it is viable ONLY when the field has a
+     *       trigram {@code wildcard} subfield to route to.</li>
+     * </ul>
+     * Non-literal patterns are treated as GENERAL (conservative). If the operand shape is unexpected,
+     * returns {@code true} (leave existing behavior unchanged).
+     */
+    private boolean likeDelegationViable(RexCall predicate, FieldStorageInfo field) {
+        String pattern = likePatternLiteral(predicate);
+        boolean keywordFamily = FieldType.keyword().contains(field.getFieldType());
+        if (pattern != null && SqlLikePattern.classify(pattern) == SqlLikePattern.Shape.PREFIX) {
+            return keywordFamily || field.getExactMatchSubfield() != null;
+        }
+        // GENERAL (or unknown/non-literal) leading-wildcard: only the trigram wildcard subfield is fast.
+        return field.getSubstringMatchSubfield() != null;
+    }
+
+    /** The literal pattern string of a {@code LIKE($col, 'pattern')} call, or {@code null} if not a literal. */
+    private static String likePatternLiteral(RexCall predicate) {
+        for (RexNode operand : predicate.getOperands()) {
+            if (operand instanceof RexLiteral literal && literal.getValue() != null) {
+                Object v = literal.getValue2();
+                if (v instanceof org.apache.calcite.util.NlsString nls) {
+                    return nls.getValue();
+                }
+                if (v instanceof String s) {
+                    return s;
+                }
+            }
+        }
+        return null;
     }
 
     /**

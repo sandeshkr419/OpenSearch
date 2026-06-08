@@ -93,6 +93,44 @@ public class FilterRuleTests extends BasePlannerRulesTests {
         assertPredicateAnnotation(annotated, MockDataFusionBackend.NAME, MockLuceneBackend.NAME);
     }
 
+    /**
+     * Leading-wildcard LIKE ({@code '%foo%'}) on a keyword field WITHOUT a wildcard subfield must NOT
+     * be Lucene-viable: on a plain term dictionary it is a full-dictionary sweep (the LIKE-on-URL
+     * regression). It stays native on DataFusion.
+     */
+    public void testLeadingWildcardLikeWithoutWildcardSubfieldNotLuceneViable() {
+        OpenSearchFilter result = runFilter(
+            "parquet",
+            Map.of("url", Map.of("type", "keyword", "index", true)),
+            new String[] { "url" },
+            new SqlTypeName[] { SqlTypeName.VARCHAR },
+            makeLike(0, "%foo%")
+        );
+
+        AnnotatedPredicate annotated = (AnnotatedPredicate) result.getCondition();
+        assertFalse(
+            "leading-wildcard LIKE without a wildcard subfield must not be Lucene-viable",
+            annotated.getViableBackends().contains(MockLuceneBackend.NAME)
+        );
+    }
+
+    /**
+     * Leading-wildcard LIKE on a keyword field WITH a {@code wildcard} subfield IS Lucene-viable —
+     * the wildcard subfield's trigram index makes {@code %foo%} fast; LikeSerializer routes to it.
+     */
+    public void testLeadingWildcardLikeWithWildcardSubfieldIsLuceneViable() {
+        OpenSearchFilter result = runFilter(
+            "parquet",
+            Map.of("url", Map.of("type", "keyword", "index", true, "fields", Map.of("wild", Map.of("type", "wildcard")))),
+            new String[] { "url" },
+            new SqlTypeName[] { SqlTypeName.VARCHAR },
+            makeLike(0, "%foo%")
+        );
+
+        AnnotatedPredicate annotated = (AnnotatedPredicate) result.getCondition();
+        assertPredicateAnnotation(annotated, MockDataFusionBackend.NAME, MockLuceneBackend.NAME);
+    }
+
     /** Keyword equality — both backends viable per-predicate, operator-level only child. */
     public void testKeywordEqualsAnnotatedWithBothBackends() {
         OpenSearchFilter result = runFilter(

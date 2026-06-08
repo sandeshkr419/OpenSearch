@@ -77,6 +77,29 @@ public class LikeSerializerTests extends OpenSearchTestCase {
         assertEquals("*foo*", w.value());
     }
 
+    public void testContainsPatternRoutesToWildcardSubfieldWhenPresent() {
+        // Field has a 'wild' substring (trigram) subfield → leading-wildcard LIKE targets str0.wild.
+        List<FieldStorageInfo> withSubfield = List.of(
+            new FieldStorageInfo(
+                "str0",
+                "keyword",
+                FieldType.KEYWORD,
+                List.of(),
+                List.of("lucene"),
+                List.of(),
+                false,
+                (String) null,
+                "wild"
+            )
+        );
+        WildcardQueryBuilder w = (WildcardQueryBuilder) serializer.buildQueryBuilder(
+            (org.apache.calcite.rex.RexCall) like("%foo%"),
+            withSubfield
+        );
+        assertEquals("routes to the wildcard subfield", "str0.wild", w.fieldName());
+        assertEquals("*foo*", w.value());
+    }
+
     public void testUnderscoreBuildsWildcardQuery() {
         WildcardQueryBuilder w = (WildcardQueryBuilder) build(like("on_"));
         assertEquals("on?", w.value());

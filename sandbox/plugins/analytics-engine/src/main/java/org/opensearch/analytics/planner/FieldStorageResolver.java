@@ -160,7 +160,8 @@ public class FieldStorageResolver {
             indexFormats,
             storedFieldFormats,
             false,
-            exactMatchSubfieldOf(fieldType, fieldProps)
+            exactMatchSubfieldOf(fieldType, fieldProps),
+            substringMatchSubfieldOf(fieldProps)
         );
     }
 
@@ -180,6 +181,27 @@ public class FieldStorageResolver {
         }
         for (Map.Entry<?, ?> entry : subfields.entrySet()) {
             if (entry.getValue() instanceof Map<?, ?> subProps && "keyword".equals(subProps.get("type"))) {
+                return String.valueOf(entry.getKey());
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Returns the name of the first {@code wildcard}-type subfield in the field's {@code fields}
+     * multifield block (e.g. {@code "wildcard"}), or {@code null} if there is none. A wildcard
+     * subfield carries a trigram index, so substring/leading-wildcard LIKE can be delegated to it
+     * (see {@link FieldStorageInfo#getSubstringMatchSubfield()}). Unlike the exact-match subfield this
+     * is allowed on any parent type (keyword or text) — the trigram index is what matters, not the parent.
+     */
+    @SuppressWarnings("unchecked")
+    private static String substringMatchSubfieldOf(Map<String, Object> fieldProps) {
+        Object fields = fieldProps.get("fields");
+        if (!(fields instanceof Map<?, ?> subfields)) {
+            return null;
+        }
+        for (Map.Entry<?, ?> entry : subfields.entrySet()) {
+            if (entry.getValue() instanceof Map<?, ?> subProps && "wildcard".equals(subProps.get("type"))) {
                 return String.valueOf(entry.getKey());
             }
         }

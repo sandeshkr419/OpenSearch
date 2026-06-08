@@ -35,6 +35,12 @@ public class FieldStorageInfo {
      * multifield — or {@code null} when the field is queried directly. Resolved from the mapping.
      */
     private final String exactMatchSubfield;
+    /**
+     * Subfield to target for substring/leading-wildcard predicates — e.g. a {@code wildcard}-type
+     * multifield whose trigram index makes {@code %x%} LIKE fast — or {@code null} when none exists.
+     * Resolved from the mapping. Mirrors {@link #exactMatchSubfield} but for the substring path.
+     */
+    private final String substringMatchSubfield;
 
     public FieldStorageInfo(
         String fieldName,
@@ -61,6 +67,21 @@ public class FieldStorageInfo {
         boolean derived,
         String exactMatchSubfield
     ) {
+        this(fieldName, mappingType, fieldType, docValueFormats, indexFormats, storedFieldFormats, derived, exactMatchSubfield, null);
+    }
+
+    /** Physical-field ctor with explicit exact-match and substring-match subfield names (or null). */
+    public FieldStorageInfo(
+        String fieldName,
+        String mappingType,
+        FieldType fieldType,
+        List<String> docValueFormats,
+        List<String> indexFormats,
+        List<String> storedFieldFormats,
+        boolean derived,
+        String exactMatchSubfield,
+        String substringMatchSubfield
+    ) {
         this(
             fieldName,
             mappingType,
@@ -70,7 +91,8 @@ public class FieldStorageInfo {
             storedFieldFormats,
             derived,
             new LinkedHashSet<>(),
-            exactMatchSubfield
+            exactMatchSubfield,
+            substringMatchSubfield
         );
     }
 
@@ -84,7 +106,18 @@ public class FieldStorageInfo {
         boolean derived,
         LinkedHashSet<String> dependsOnPhysicalCols
     ) {
-        this(fieldName, mappingType, fieldType, docValueFormats, indexFormats, storedFieldFormats, derived, dependsOnPhysicalCols, null);
+        this(
+            fieldName,
+            mappingType,
+            fieldType,
+            docValueFormats,
+            indexFormats,
+            storedFieldFormats,
+            derived,
+            dependsOnPhysicalCols,
+            null,
+            null
+        );
     }
 
     public FieldStorageInfo(
@@ -98,6 +131,32 @@ public class FieldStorageInfo {
         LinkedHashSet<String> dependsOnPhysicalCols,
         String exactMatchSubfield
     ) {
+        this(
+            fieldName,
+            mappingType,
+            fieldType,
+            docValueFormats,
+            indexFormats,
+            storedFieldFormats,
+            derived,
+            dependsOnPhysicalCols,
+            exactMatchSubfield,
+            null
+        );
+    }
+
+    public FieldStorageInfo(
+        String fieldName,
+        String mappingType,
+        FieldType fieldType,
+        List<String> docValueFormats,
+        List<String> indexFormats,
+        List<String> storedFieldFormats,
+        boolean derived,
+        LinkedHashSet<String> dependsOnPhysicalCols,
+        String exactMatchSubfield,
+        String substringMatchSubfield
+    ) {
         this.fieldName = fieldName;
         this.mappingType = mappingType;
         this.fieldType = fieldType;
@@ -107,6 +166,7 @@ public class FieldStorageInfo {
         this.derived = derived;
         this.dependsOnPhysicalCols = dependsOnPhysicalCols;
         this.exactMatchSubfield = exactMatchSubfield;
+        this.substringMatchSubfield = substringMatchSubfield;
     }
 
     /** Creates a derived column (agg result, expression) with no physical storage and no deps.
@@ -141,6 +201,12 @@ public class FieldStorageInfo {
      *  multifield — or {@code null} when the field is queried directly. */
     public String getExactMatchSubfield() {
         return exactMatchSubfield;
+    }
+
+    /** Subfield to target for substring/leading-wildcard predicates — e.g. a {@code wildcard}-type
+     *  multifield (trigram index) — or {@code null} when none exists. */
+    public String getSubstringMatchSubfield() {
+        return substringMatchSubfield;
     }
 
     public String getMappingType() {
