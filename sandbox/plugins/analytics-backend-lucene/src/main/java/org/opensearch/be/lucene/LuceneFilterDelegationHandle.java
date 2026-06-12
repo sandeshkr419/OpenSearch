@@ -15,11 +15,10 @@ import org.apache.lucene.index.FilterLeafReader;
 import org.apache.lucene.index.LeafReader;
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.SegmentReader;
-import org.apache.lucene.search.DocIdSetIterator;
+import org.apache.lucene.search.BulkScorer;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreMode;
-import org.apache.lucene.search.Scorer;
 import org.apache.lucene.search.Weight;
 import org.apache.lucene.util.FixedBitSet;
 import org.opensearch.analytics.spi.DelegatedExpression;
@@ -185,9 +184,9 @@ final class LuceneFilterDelegationHandle implements FilterDelegationHandle {
             + leafMaxDoc;
 
         try {
-            Scorer scorer = weight.scorer(leaf);
+            BulkScorer bulkScorer = weight.bulkScorer(leaf);
             int collectorKey = nextCollectorKey.getAndIncrement();
-            scorersByCollectorKey.put(collectorKey, new ScorerHandle(scorer, minDoc, maxDoc));
+            scorersByCollectorKey.put(collectorKey, new ScorerHandle(bulkScorer, minDoc, maxDoc));
             LOGGER.debug(
                 "[scf] createCollector providerKey={} writerGeneration={} range=[{},{}) → collectorKey={}",
                 providerKey,
@@ -223,24 +222,21 @@ final class LuceneFilterDelegationHandle implements FilterDelegationHandle {
         int span = maxDoc - minDoc;
         FixedBitSet bits = new FixedBitSet(span);
 
-        if (handle.scorer != null) {
+        if (handle.bulkScorer != null) {
             int scanFrom = Math.max(minDoc, handle.partitionMinDoc);
             int scanTo = Math.min(maxDoc, handle.partitionMaxDoc);
 
             if (scanFrom < scanTo) {
                 try {
-                    DocIdSetIterator iterator = handle.scorer.iterator();
-                    int docId = handle.currentDoc;
-                    if (docId != DocIdSetIterator.NO_MORE_DOCS) {
-                        if (docId < scanFrom) {
-                            docId = iterator.advance(scanFrom);
+                    handle.bulkScorer.score(new org.apache.lucene.search.LeafCollector() {
+                        @Override
+                        public void setScorer(org.apache.lucene.search.Scorable scorable) {}
+
+                        @Override
+                        public void collect(int doc) {
+                            bits.set(doc - minDoc);
                         }
-                        while (docId != DocIdSetIterator.NO_MORE_DOCS && docId < scanTo) {
-                            bits.set(docId - minDoc);
-                            docId = iterator.nextDoc();
-                        }
-                        handle.currentDoc = docId;
-                    }
+                    }, null, scanFrom, scanTo);
                 } catch (IOException exception) {
                     LOGGER.warn("IOException during collectDocs, returning partial bitset", exception);
                 }
@@ -288,13 +284,12 @@ final class LuceneFilterDelegationHandle implements FilterDelegationHandle {
     }
 
     private static final class ScorerHandle {
-        final Scorer scorer;
+        final BulkScorer bulkScorer;
         final int partitionMinDoc;
         final int partitionMaxDoc;
-        int currentDoc = -1;
 
-        ScorerHandle(Scorer scorer, int partitionMinDoc, int partitionMaxDoc) {
-            this.scorer = scorer;
+        ScorerHandle(BulkScorer bulkScorer, int partitionMinDoc, int partitionMaxDoc) {
+            this.bulkScorer = bulkScorer;
             this.partitionMinDoc = partitionMinDoc;
             this.partitionMaxDoc = partitionMaxDoc;
         }
