@@ -487,7 +487,7 @@ impl ExecutionPlan for QueryShardExec {
             })?;
 
             let rg_set: HashSet<usize> = chunk.row_group_indices.iter().copied().collect();
-            let row_groups: Vec<RowGroupInfo> = segment
+            let mut row_groups: Vec<RowGroupInfo> = segment
                 .row_groups
                 .iter()
                 .filter(|rg| rg_set.contains(&rg.index))
@@ -496,6 +496,12 @@ impl ExecutionPlan for QueryShardExec {
 
             if row_groups.is_empty() {
                 continue;
+            }
+
+            // When a dynamic filter (TopK) is active, sort RGs by the filter column's
+            // min stat so the tightest threshold is established from the earliest batches.
+            if let Some(ref df) = dynamic_filter {
+                sort_row_groups_by_dynamic_filter(&mut row_groups, df, &segment.metadata);
             }
 
             // Build stats prune tree for segment/RG/subtree-level pruning.
@@ -632,6 +638,61 @@ impl QueryShardExec {
             dynamic_filters,
         }
     }
+}
+
+/// Sort row groups by the min statistic of the first column referenced by the dynamic
+/// filter. This lets TopK establish a tight threshold early, enabling aggressive RG
+/// pruning on subsequent iterations. No-op when stats are unavailable.
+fn sort_row_groups_by_dynamic_filter(
+    row_groups: &mut Vec<RowGroupInfo>,
+    filter_expr: &Arc<dyn datafusion::physical_expr::PhysicalExpr>,
+    metadata: &Arc<ParquetMetaData>,
+) {
+    use datafusion::physical_expr::expressions::Column;
+    use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion::parquet::arrow::arrow_reader::statistics::StatisticsConverter;
+    use datafusion::parquet::file::metadata::RowGroupMetaData;
+
+    let mut sort_col_name: Option<String> = None;
+    let _ = filter_expr.apply(|node| {
+        if sort_col_name.is_none() {
+            if let Some(col) = node.downcast_ref::<Column>() {
+                sort_col_name = Some(col.name().to_string());
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    });
+    let Some(col_name) = sort_col_name else { return };
+
+    let rg_metadata = metadata.row_groups();
+    let parquet_schema = metadata.file_metadata().schema_descr();
+    let arrow_schema = datafusion::parquet::arrow::parquet_to_arrow_schema(parquet_schema, None);
+    let Ok(arrow_schema) = arrow_schema else { return };
+
+    let converter = StatisticsConverter::try_new(&col_name, &arrow_schema, parquet_schema);
+    let Ok(converter) = converter else { return };
+
+    let all_rg_metas: Vec<&RowGroupMetaData> = row_groups
+        .iter()
+        .filter_map(|rg| rg_metadata.get(rg.index))
+        .collect();
+    let Ok(min_array) = converter.row_group_mins(all_rg_metas.into_iter()) else { return };
+
+    // Sort RGs by their min stat value for the sort column.
+    let scalars: Vec<datafusion::common::ScalarValue> = (0..row_groups.len())
+        .map(|i| {
+            datafusion::common::ScalarValue::try_from_array(&min_array, i)
+                .unwrap_or(datafusion::common::ScalarValue::Null)
+        })
+        .collect();
+
+    let mut indices: Vec<usize> = (0..row_groups.len()).collect();
+    indices.sort_by(|&a, &b| {
+        scalars[a].partial_cmp(&scalars[b]).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let sorted: Vec<RowGroupInfo> = indices.iter().map(|&i| row_groups[i].clone()).collect();
+    *row_groups = sorted;
 }
 
 #[cfg(test)]
