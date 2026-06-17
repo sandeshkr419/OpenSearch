@@ -27,6 +27,7 @@ pub(crate) enum Mode {
 }
 
 /// Returns the default physical optimizer rules with `CombinePartialFinalAggregate` removed.
+/// Excluded because `prepare_partial_plan` needs the Partial+Final pair intact for stripping.
 pub(crate) fn physical_optimizer_rules_without_combine(
 ) -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
     let combine_name = CombinePartialFinalAggregate::new().name().to_string();
@@ -35,6 +36,20 @@ pub(crate) fn physical_optimizer_rules_without_combine(
         .into_iter()
         .filter(|r| r.name() != combine_name)
         .collect()
+}
+
+/// Post-physical-plan aggregate mode finalization.
+/// - `Default`: collapses Partial+Final → Single (single-shard path).
+/// - `Partial`/`Final`: strips the opposite half (multi-shard path).
+pub(crate) fn finalize_aggregate_plan(
+    plan: Arc<dyn ExecutionPlan>,
+    mode: Mode,
+    config: &datafusion::common::config::ConfigOptions,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    match mode {
+        Mode::Default => CombinePartialFinalAggregate::new().optimize(plan, config),
+        _ => apply_aggregate_mode(plan, mode),
+    }
 }
 
 /// Applies aggregate mode stripping to a physical plan.

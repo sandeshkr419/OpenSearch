@@ -1205,17 +1205,15 @@ async unsafe fn execute_indexed_with_context_inner(
     log_debug!("DataFusion logical plan:\n{}", logical_plan.display_indent());
     let dataframe = ctx.execute_logical_plan(logical_plan).await?;
     let physical_plan = dataframe.create_physical_plan().await?;
+    let physical_plan = crate::agg_mode::finalize_aggregate_plan(
+        physical_plan,
+        aggregate_mode,
+        ctx.state().config_options(),
+    )?;
     // Retag bit-compatible Int↔UInt output mismatches to match the substrait-declared
     // types. The target is schema_coerce::coerce_inferred_schema(physical_schema) — same
     // narrowing the partition-stream registration uses, so consumer-side StreamingTable
     // and producer-side batches agree by construction (see crate::relabel_exec).
-    // Apply aggregate mode stripping when prepare_partial_plan was called (engine-native-merge).
-    // This makes the indexed executor produce Binary HLL state (Partial) instead of Int64 (Final).
-    let physical_plan = if aggregate_mode != crate::agg_mode::Mode::Default {
-        crate::agg_mode::apply_aggregate_mode(physical_plan, aggregate_mode)?
-    } else {
-        physical_plan
-    };
     let target_schema = crate::schema_coerce::coerce_inferred_schema(physical_plan.schema());
     let physical_plan = crate::relabel_exec::wrap_if_relabel_needed(physical_plan, target_schema)?;
     log_debug!("DataFusion physical plan:\n{}", displayable(physical_plan.as_ref()).indent(true));

@@ -346,6 +346,12 @@ pub async fn execute_with_context(
         // ProjectRowIdOptimizer (registered in session_context when strategy=ListingTable).
         let physical_plan = dataframe.create_physical_plan().await?;
 
+        let physical_plan = crate::agg_mode::finalize_aggregate_plan(
+            physical_plan,
+            crate::agg_mode::Mode::Default,
+            handle.ctx.state().config_options(),
+        )?;
+
         let target_schema = crate::schema_coerce::coerce_inferred_schema(physical_plan.schema());
         let physical_plan = crate::relabel_exec::wrap_if_relabel_needed(physical_plan, target_schema)?;
         log_debug!("DataFusion physical plan:\n{}", displayable(physical_plan.as_ref()).indent(true));
