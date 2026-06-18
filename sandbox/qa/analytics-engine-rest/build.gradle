@@ -43,6 +43,7 @@ dependencies {
     // explain endpoint (returns plain Calcite plan text). All other QA tests use
     // /_plugins/_ppl on the real plugin.
     testImplementation project(':sandbox:plugins:test-ppl-frontend')
+    testImplementation "org.yaml:snakeyaml:2.4"
 
     // job-scheduler pulled from OpenSearch Snapshots (no local build).
     jobSchedulerPlugin "org.opensearch.plugin:opensearch-job-scheduler:3.8.0.0-SNAPSHOT@zip"

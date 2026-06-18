@@ -1,0 +1,106 @@
+# Plan shapes for q1: source = clickbench | count()
+# Combos: shards(1,2) x slice(1,N) x topk(off,on) x scan(vanilla,delegation)
+
+1s_slice1_topk_off_vanilla:
+  calcite: |
+    OpenSearchAggregate(group=[{}], count()=[COUNT()], mode=[SINGLE], viableBackends=[[lucene, datafusion]])
+      OpenSearchTableScan(table=[[plan_shape_1s]], viableBackends=[[lucene, datafusion]])
+
+1s_slice1_topk_on_vanilla:
+  calcite: |
+    OpenSearchAggregate(group=[{}], count()=[COUNT()], mode=[SINGLE], viableBackends=[[lucene, datafusion]])
+      OpenSearchTableScan(table=[[plan_shape_1s]], viableBackends=[[lucene, datafusion]])
+
+1s_sliceN_topk_off_vanilla:
+  calcite: |
+    OpenSearchAggregate(group=[{}], count()=[COUNT()], mode=[SINGLE], viableBackends=[[lucene, datafusion]])
+      OpenSearchTableScan(table=[[plan_shape_1s]], viableBackends=[[lucene, datafusion]])
+
+1s_sliceN_topk_on_vanilla:
+  calcite: |
+    OpenSearchAggregate(group=[{}], count()=[COUNT()], mode=[SINGLE], viableBackends=[[lucene, datafusion]])
+      OpenSearchTableScan(table=[[plan_shape_1s]], viableBackends=[[lucene, datafusion]])
+
+1s_slice1_topk_off_delegation:
+  calcite: |
+    OpenSearchAggregate(group=[{}], count()=[COUNT()], mode=[SINGLE], viableBackends=[[lucene, datafusion]])
+      OpenSearchTableScan(table=[[plan_shape_1s]], viableBackends=[[lucene, datafusion]])
+
+1s_slice1_topk_on_delegation:
+  calcite: |
+    OpenSearchAggregate(group=[{}], count()=[COUNT()], mode=[SINGLE], viableBackends=[[lucene, datafusion]])
+      OpenSearchTableScan(table=[[plan_shape_1s]], viableBackends=[[lucene, datafusion]])
+
+1s_sliceN_topk_off_delegation:
+  calcite: |
+    OpenSearchAggregate(group=[{}], count()=[COUNT()], mode=[SINGLE], viableBackends=[[lucene, datafusion]])
+      OpenSearchTableScan(table=[[plan_shape_1s]], viableBackends=[[lucene, datafusion]])
+
+1s_sliceN_topk_on_delegation:
+  calcite: |
+    OpenSearchAggregate(group=[{}], count()=[COUNT()], mode=[SINGLE], viableBackends=[[lucene, datafusion]])
+      OpenSearchTableScan(table=[[plan_shape_1s]], viableBackends=[[lucene, datafusion]])
+
+2s_slice1_topk_off_vanilla:
+  calcite: |
+    OpenSearchProject(count()=[CAST($0):BIGINT NOT NULL], viableBackends=[[lucene, datafusion]])
+      OpenSearchAggregate(group=[{}], count()=[SUM($0)], mode=[FINAL], viableBackends=[[lucene, datafusion]])
+        OpenSearchExchangeReducer(viableBackends=[[datafusion]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
+          OpenSearchAggregate(group=[{}], count()=[COUNT()], mode=[PARTIAL], viableBackends=[[lucene, datafusion]])
+            OpenSearchTableScan(table=[[plan_shape_2s]], viableBackends=[[lucene, datafusion]])
+
+2s_slice1_topk_on_vanilla:
+  calcite: |
+    OpenSearchProject(count()=[CAST($0):BIGINT NOT NULL], viableBackends=[[lucene, datafusion]])
+      OpenSearchAggregate(group=[{}], count()=[SUM($0)], mode=[FINAL], viableBackends=[[lucene, datafusion]])
+        OpenSearchExchangeReducer(viableBackends=[[datafusion]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
+          OpenSearchAggregate(group=[{}], count()=[COUNT()], mode=[PARTIAL], viableBackends=[[lucene, datafusion]])
+            OpenSearchTableScan(table=[[plan_shape_2s]], viableBackends=[[lucene, datafusion]])
+
+2s_sliceN_topk_off_vanilla:
+  calcite: |
+    OpenSearchProject(count()=[CAST($0):BIGINT NOT NULL], viableBackends=[[lucene, datafusion]])
+      OpenSearchAggregate(group=[{}], count()=[SUM($0)], mode=[FINAL], viableBackends=[[lucene, datafusion]])
+        OpenSearchExchangeReducer(viableBackends=[[datafusion]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
+          OpenSearchAggregate(group=[{}], count()=[COUNT()], mode=[PARTIAL], viableBackends=[[lucene, datafusion]])
+            OpenSearchTableScan(table=[[plan_shape_2s]], viableBackends=[[lucene, datafusion]])
+
+2s_sliceN_topk_on_vanilla:
+  calcite: |
+    OpenSearchProject(count()=[CAST($0):BIGINT NOT NULL], viableBackends=[[lucene, datafusion]])
+      OpenSearchAggregate(group=[{}], count()=[SUM($0)], mode=[FINAL], viableBackends=[[lucene, datafusion]])
+        OpenSearchExchangeReducer(viableBackends=[[datafusion]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
+          OpenSearchAggregate(group=[{}], count()=[COUNT()], mode=[PARTIAL], viableBackends=[[lucene, datafusion]])
+            OpenSearchTableScan(table=[[plan_shape_2s]], viableBackends=[[lucene, datafusion]])
+
+2s_slice1_topk_off_delegation:
+  calcite: |
+    OpenSearchProject(count()=[CAST($0):BIGINT NOT NULL], viableBackends=[[lucene, datafusion]])
+      OpenSearchAggregate(group=[{}], count()=[SUM($0)], mode=[FINAL], viableBackends=[[lucene, datafusion]])
+        OpenSearchExchangeReducer(viableBackends=[[datafusion]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
+          OpenSearchAggregate(group=[{}], count()=[COUNT()], mode=[PARTIAL], viableBackends=[[lucene, datafusion]])
+            OpenSearchTableScan(table=[[plan_shape_2s]], viableBackends=[[lucene, datafusion]])
+
+2s_slice1_topk_on_delegation:
+  calcite: |
+    OpenSearchProject(count()=[CAST($0):BIGINT NOT NULL], viableBackends=[[lucene, datafusion]])
+      OpenSearchAggregate(group=[{}], count()=[SUM($0)], mode=[FINAL], viableBackends=[[lucene, datafusion]])
+        OpenSearchExchangeReducer(viableBackends=[[datafusion]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
+          OpenSearchAggregate(group=[{}], count()=[COUNT()], mode=[PARTIAL], viableBackends=[[lucene, datafusion]])
+            OpenSearchTableScan(table=[[plan_shape_2s]], viableBackends=[[lucene, datafusion]])
+
+2s_sliceN_topk_off_delegation:
+  calcite: |
+    OpenSearchProject(count()=[CAST($0):BIGINT NOT NULL], viableBackends=[[lucene, datafusion]])
+      OpenSearchAggregate(group=[{}], count()=[SUM($0)], mode=[FINAL], viableBackends=[[lucene, datafusion]])
+        OpenSearchExchangeReducer(viableBackends=[[datafusion]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
+          OpenSearchAggregate(group=[{}], count()=[COUNT()], mode=[PARTIAL], viableBackends=[[lucene, datafusion]])
+            OpenSearchTableScan(table=[[plan_shape_2s]], viableBackends=[[lucene, datafusion]])
+
+2s_sliceN_topk_on_delegation:
+  calcite: |
+    OpenSearchProject(count()=[CAST($0):BIGINT NOT NULL], viableBackends=[[lucene, datafusion]])
+      OpenSearchAggregate(group=[{}], count()=[SUM($0)], mode=[FINAL], viableBackends=[[lucene, datafusion]])
+        OpenSearchExchangeReducer(viableBackends=[[datafusion]], exchange=[ExchangeInfo[distributionType=SINGLETON, partitionKeyIndices=[]]])
+          OpenSearchAggregate(group=[{}], count()=[COUNT()], mode=[PARTIAL], viableBackends=[[lucene, datafusion]])
+            OpenSearchTableScan(table=[[plan_shape_2s]], viableBackends=[[lucene, datafusion]])
