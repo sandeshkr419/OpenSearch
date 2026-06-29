@@ -456,10 +456,51 @@ pub async fn prepare_partial_plan(
     // "non-bit-compatible types: Binary → Int64" when wrapping the stripped Partial.
     let stripped = crate::agg_mode::apply_aggregate_mode(physical_plan, crate::agg_mode::Mode::Partial)?;
 
+    // When CSS produces multiple partitions (target_partitions > 1), the shard TopK SortExec
+    // runs per-partition with preserve_partitioning=true — each partition independently keeps
+    // its top-N groups based on local partial counts, dropping groups whose partial count
+    // doesn't rank high enough in that partition alone. Insert CoalescePartitionsExec below
+    // the TopK SortExec to merge all partitions before TopK operates, so TopK sees the
+    // complete shard-local partial aggregate. CSS parallelism is preserved for the expensive
+    // scan+filter+aggregate steps; only the final cheap sort is single-threaded.
+    let target_partitions = handle.ctx.state().config().target_partitions();
+    let stripped = if target_partitions > 1 {
+        coalesce_before_topk_sort(stripped)
+    } else {
+        stripped
+    };
+
     let target_schema = crate::schema_coerce::coerce_inferred_schema(stripped.schema());
     let stripped = crate::relabel_exec::wrap_if_relabel_needed(stripped, target_schema)?;
     handle.prepared_plan = Some(stripped);
     Ok(())
+}
+
+/// If the plan root is a TopK SortExec (preserve_partitioning=true), insert a
+/// CoalescePartitionsExec below it so TopK sees fully merged partial counts.
+fn coalesce_before_topk_sort(
+    plan: Arc<dyn datafusion::physical_plan::ExecutionPlan>,
+) -> Arc<dyn datafusion::physical_plan::ExecutionPlan> {
+    use datafusion::physical_plan::sorts::sort::SortExec;
+    use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use datafusion::physical_plan::ExecutionPlanProperties;
+
+    let Some(sort) = plan.downcast_ref::<SortExec>() else {
+        return plan;
+    };
+    if !sort.preserve_partitioning() {
+        return plan;
+    }
+    let input = Arc::clone(sort.input());
+    if input.output_partitioning().partition_count() <= 1 {
+        return plan;
+    }
+    let coalesced: Arc<dyn datafusion::physical_plan::ExecutionPlan> =
+        Arc::new(CoalescePartitionsExec::new(input));
+    match Arc::clone(&plan).with_new_children(vec![coalesced]) {
+        Ok(s) => s,
+        Err(_) => plan,
+    }
 }
 
 /// Attempt to acquire a memory budget using cached parquet metadata.
