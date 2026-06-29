@@ -14,9 +14,12 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion::physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule};
 use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::expressions::Column;
 use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::ExecutionPlanProperties;
 use datafusion_common::Result;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -97,6 +100,18 @@ fn force_aggregate_mode(
         // Single-input wrapper — recurse transparently.
         let old_child = Arc::clone(plan.children()[0]);
         let new_child = force_aggregate_mode(old_child.clone(), target)?;
+
+        // When stripping to Partial mode and this is a SortExec with preserve_partitioning=true
+        // (CSS produces per-partition TopK), insert CoalescePartitionsExec so the sort sees
+        // fully merged partial counts instead of truncating per partition independently.
+        if target == AggregateMode::Partial {
+            if let Some(sort) = plan.downcast_ref::<SortExec>() {
+                if sort.preserve_partitioning() && new_child.output_partitioning().partition_count() > 1 {
+                    let coalesced = Arc::new(CoalescePartitionsExec::new(new_child));
+                    return plan.with_new_children(vec![coalesced]);
+                }
+            }
+        }
 
         // DataFusion's ProjectionMapping::try_new asserts col.name() == input_schema.field(i).name();
         // with_new_children triggers it. Remap columns to the post-strip schema so it passes.
