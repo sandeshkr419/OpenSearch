@@ -35,6 +35,7 @@ public class PartialAggregateInstructionHandler implements FragmentInstructionHa
         DataFusionSessionState state = (DataFusionSessionState) backendContext;
         long sessionPtr = state.sessionContextHandle().getPointer();
         NativeBridge.preparePartialPlan(sessionPtr, ctx.getFragmentBytes());
+        ctx.setHasTopK(node.hasTopK());
         return backendContext;
     }
 }

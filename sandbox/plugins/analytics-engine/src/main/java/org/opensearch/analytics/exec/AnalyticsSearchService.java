@@ -438,6 +438,13 @@ public class AnalyticsSearchService implements AutoCloseable {
                     .stream()
                     .anyMatch(n -> n.type() == org.opensearch.analytics.spi.InstructionType.SETUP_PARTIAL_AGGREGATE)
             );
+            ctx.setHasTopK(
+                resolved.plan.getInstructions()
+                    .stream()
+                    .filter(n -> n instanceof org.opensearch.analytics.spi.PartialAggregateInstructionNode)
+                    .map(n -> (org.opensearch.analytics.spi.PartialAggregateInstructionNode) n)
+                    .anyMatch(org.opensearch.analytics.spi.PartialAggregateInstructionNode::hasTopK)
+            );
             AnalyticsSearchBackendPlugin backend = backends.get(resolved.plan.getBackendId());
 
             backendContext = applyInstructionHandlers(backend, resolved.plan.getInstructions(), ctx);

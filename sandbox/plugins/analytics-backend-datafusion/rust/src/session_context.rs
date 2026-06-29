@@ -145,6 +145,7 @@ pub async unsafe fn create_session_context(
     table_name: &str,
     context_id: i64,
     has_partial_aggregate: bool,
+    has_topk: bool,
     query_config: DatafusionQueryConfig,
     plan_bytes: &[u8],
 ) -> Result<i64, DataFusionError> {
@@ -190,9 +191,17 @@ pub async unsafe fn create_session_context(
     let phantom_reservation = try_acquire_budget(
         runtime, &global_pool, &shard_view, &query_config,
     );
-    let effective_partitions = phantom_reservation.as_ref()
-        .map(|b| b.target_partitions)
-        .unwrap_or(query_config.target_partitions);
+    // When the shard fragment has both a partial aggregate and a TopK sort, force a single
+    // partition so CSS does not split the shard data across partitions: each partition would
+    // independently truncate to the TopK limit before the coordinator merge, causing groups
+    // to be dropped. A single partition preserves the full per-shard ordering before merge.
+    let effective_partitions = if has_partial_aggregate && has_topk {
+        1
+    } else {
+        phantom_reservation.as_ref()
+            .map(|b| b.target_partitions)
+            .unwrap_or(query_config.target_partitions)
+    };
     let effective_batch_size = phantom_reservation.as_ref()
         .map(|b| b.batch_size)
         .unwrap_or(query_config.batch_size);
@@ -406,10 +415,11 @@ pub async unsafe fn create_session_context_indexed(
     delegated_predicate_count: i32,
     requests_row_ids: bool,
     has_partial_aggregate: bool,
+    has_topk: bool,
     query_config: DatafusionQueryConfig,
     plan_bytes: &[u8],
 ) -> Result<i64, DataFusionError> {
-    let ptr = create_session_context(runtime_ptr, shard_view_ptr, table_name, context_id, has_partial_aggregate, query_config, plan_bytes).await?;
+    let ptr = create_session_context(runtime_ptr, shard_view_ptr, table_name, context_id, has_partial_aggregate, has_topk, query_config, plan_bytes).await?;
 
     // Augment with indexed config. The delegation marker UDFs (index_filter, delegation_possible)
     // are now registered for every session by udf::register_all (via create_session_context above);
