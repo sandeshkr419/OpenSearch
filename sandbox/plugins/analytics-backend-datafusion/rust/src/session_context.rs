@@ -146,7 +146,7 @@ pub async unsafe fn create_session_context(
     context_id: i64,
     has_partial_aggregate: bool,
     has_topk: bool,
-    query_config: DatafusionQueryConfig,
+    mut query_config: DatafusionQueryConfig,
     plan_bytes: &[u8],
 ) -> Result<i64, DataFusionError> {
     let runtime = &*(runtime_ptr as *const DataFusionRuntime);
@@ -206,6 +206,10 @@ pub async unsafe fn create_session_context(
         .map(|b| b.batch_size)
         .unwrap_or(query_config.batch_size);
     let phantom = phantom_reservation.map(|b| b.phantom_reservation);
+
+    // Propagate effective_partitions back onto query_config so execute_indexed_with_context
+    // uses the same value when building IndexedTableConfig → QueryShardExec.assignments.
+    query_config.target_partitions = effective_partitions;
 
     let mut config = SessionConfig::new();
     config.options_mut().execution.parquet.pushdown_filters = query_config.listing_table_pushdown_filters;
