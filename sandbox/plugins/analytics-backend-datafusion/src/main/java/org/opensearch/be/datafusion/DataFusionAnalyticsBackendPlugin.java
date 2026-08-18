@@ -729,6 +729,7 @@ public class DataFusionAnalyticsBackendPlugin implements AnalyticsSearchBackendP
                     Map.entry(ScalarFunction.DEGREES, new NumericToDoubleAdapter(SqlStdOperatorTable.DEGREES)),
                     Map.entry(ScalarFunction.BINARY, new BinaryFunctionAdapter()),
                     Map.entry(ScalarFunction.CAST, ipBinaryCast),
+                    Map.entry(ScalarFunction.CBRT, new NumericToDoubleAdapter(SqlStdOperatorTable.CBRT)),
                     Map.entry(ScalarFunction.CEIL, new IntegerRoundingCastAdapter(SqlStdOperatorTable.CEIL)),
                     Map.entry(ScalarFunction.CIDRMATCH, new CidrMatchFunctionAdapter()),
                     Map.entry(ScalarFunction.COALESCE, new CoalesceAdapter()),

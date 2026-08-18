@@ -208,10 +208,102 @@ public class MathFunctionIT extends AnalyticsRestTestCase {
             12.3);
     }
 
+    // ── cbrt / cot(i32) — yaml-declared fp32/fp64 only ──────────────────────
+
+    /** {@code cbrt(int_column)} — i32 input widened to fp64. */
+    public void testCbrtOnIntColumn() throws IOException {
+        assertFirstRowDouble(oneRow() + "| eval result = cbrt(int2) | fields result", Math.cbrt(5));
+    }
+
+    /** {@code cbrt(cast as long)} — i64 input also needs widening. */
+    public void testCbrtOnLongCast() throws IOException {
+        assertFirstRowDouble(oneRow() + "| eval result = cbrt(cast(int2 as long)) | fields result", Math.cbrt(5));
+    }
+
+    /** {@code cbrt(cast as float)} — fp32 input widened to fp64. */
+    public void testCbrtOnFloatCast() throws IOException {
+        assertFirstRowDouble(oneRow() + "| eval result = cbrt(cast(int2 as float)) | fields result", Math.cbrt(5));
+    }
+
+    /** {@code cot(int_column)} — i32 input widened to fp64. */
+    public void testCotOnIntColumn() throws IOException {
+        assertFirstRowDouble(oneRow() + "| eval result = cot(int0) | fields result", 1.0 / Math.tan(1));
+    }
+
+    /** {@code atan(int_column)} — i32 input widened to fp64. */
+    public void testAtanOnIntColumn() throws IOException {
+        assertFirstRowDouble(oneRow() + "| eval result = atan(int0) | fields result", Math.PI / 4);
+    }
+
+    /** {@code acos(int_column)} — i32 input widened to fp64; {@code acos(1) = 0}. */
+    public void testAcosOnIntColumn() throws IOException {
+        assertFirstRowDouble(oneRow() + "| eval result = acos(int0) | fields result", 0.0);
+    }
+
+    /** {@code asin(int_column)} — i32 input widened to fp64; {@code asin(1) = π/2}. */
+    public void testAsinOnIntColumn() throws IOException {
+        assertFirstRowDouble(oneRow() + "| eval result = asin(int0) | fields result", Math.PI / 2);
+    }
+
+    // ── narrowing: the result type must match the operand type ──────────────
+
+    /** {@code ceil(i32)} returns {@code int}, not {@code double}. */
+    public void testCeilOnIntColumnReturnsInt() throws IOException {
+        assertFirstRowDoubleAndType(oneRow() + "| eval result = ceil(int2) | fields result", 5.0, "int");
+    }
+
+    /** {@code floor(i32)} returns {@code int}. */
+    public void testFloorOnIntColumnReturnsInt() throws IOException {
+        assertFirstRowDoubleAndType(oneRow() + "| eval result = floor(int2) | fields result", 5.0, "int");
+    }
+
+    /** {@code truncate(i32)} returns {@code int}. */
+    public void testTruncateOnIntColumnReturnsInt() throws IOException {
+        assertFirstRowDoubleAndType(oneRow() + "| eval result = truncate(int2, 0) | fields result", 5.0, "int");
+    }
+
+    /** {@code round(i32)} returns {@code int} — the shape of the original ROUND defect. */
+    public void testRoundOnIntColumnReturnsInt() throws IOException {
+        assertFirstRowDoubleAndType(oneRow() + "| eval result = round(int2) | fields result", 5.0, "int");
+    }
+
+    /** {@code round(i64)} keeps {@code bigint} rather than narrowing to {@code int}. */
+    public void testRoundOnLongCastReturnsBigint() throws IOException {
+        assertFirstRowDoubleAndType(oneRow() + "| eval result = round(cast(int2 as long)) | fields result", 5.0, "bigint");
+    }
+
+    /** {@code ceil(fp64)} stays {@code double} — the no-widening control. */
+    public void testCeilOnDoubleColumnReturnsDouble() throws IOException {
+        assertFirstRowDoubleAndType(oneRow() + "| eval result = ceil(num0) | fields result", 13.0, "double");
+    }
+
+    /** {@code sign(i32)} returns {@code int}. */
+    public void testSignumOnIntColumnReturnsInt() throws IOException {
+        assertFirstRowDoubleAndType(oneRow() + "| eval result = sign(int2) | fields result", 1.0, "int");
+    }
+
     // ── helpers (mirror ArrayFunctionIT) ────────────────────────────────────
 
     private void assertFirstRowDouble(String ppl, double expected) throws IOException {
         Object cell = firstRowFirstCell(ppl);
+        assertTrue("Expected numeric result for query [" + ppl + "] but got: " + cell, cell instanceof Number);
+        assertEquals("Value mismatch for query: " + ppl, expected, ((Number) cell).doubleValue(), 1e-9);
+    }
+
+    /** Asserts the first cell's value and the declared type of the first output column. */
+    private void assertFirstRowDoubleAndType(String ppl, double expected, String expectedType) throws IOException {
+        Map<String, Object> response = executePpl(ppl);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> schema = (List<Map<String, Object>>) response.get("schema");
+        assertNotNull("Response missing 'schema' for query: " + ppl, schema);
+        assertFalse("Expected at least one output column for query: " + ppl, schema.isEmpty());
+        assertEquals("Declared column type mismatch for query: " + ppl, expectedType, schema.get(0).get("type"));
+
+        @SuppressWarnings("unchecked")
+        List<List<Object>> rows = (List<List<Object>>) response.get("datarows");
+        assertNotNull("Response missing 'datarows' for query: " + ppl, rows);
+        assertTrue("Expected at least one row for query: " + ppl, rows.size() >= 1);
+        Object cell = rows.get(0).get(0);
         assertTrue("Expected numeric result for query [" + ppl + "] but got: " + cell, cell instanceof Number);
         assertEquals("Value mismatch for query: " + ppl, expected, ((Number) cell).doubleValue(), 1e-9);
     }

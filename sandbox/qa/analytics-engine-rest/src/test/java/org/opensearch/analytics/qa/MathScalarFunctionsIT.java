@@ -327,6 +327,30 @@ public class MathScalarFunctionsIT extends AnalyticsRestTestCase {
         assertFirstRowDouble(oneRow("key00") + "| eval v = atan2(int0, int0) | fields v", Math.PI / 4.0);
     }
 
+    // ── fp-only functions on non-floating-point operands ────────────────────
+    // These are yaml-declared fp32/fp64-only; an integer operand resolves only via a widening
+    // adapter. int0 = 1 and int1 = -3 on row key00, so the expected values are exact.
+
+    /** {@code cbrt(1)} = 1 on an INTEGER operand. */
+    public void testCbrtOnIntegerArg() throws IOException {
+        assertFirstRowDouble(oneRow("key00") + "| eval v = cbrt(int0) | fields v", Math.cbrt(1.0));
+    }
+
+    /** {@code cbrt(1)} = 1 on a BIGINT operand. */
+    public void testCbrtOnBigintArg() throws IOException {
+        assertFirstRowDouble(oneRow("key00") + "| eval v = cbrt(cast(int0 as long)) | fields v", Math.cbrt(1.0));
+    }
+
+    /** {@code cbrt(1)} = 1 on a FLOAT operand. */
+    public void testCbrtOnFloatArg() throws IOException {
+        assertFirstRowDouble(oneRow("key00") + "| eval v = cbrt(cast(int0 as float)) | fields v", Math.cbrt(1.0));
+    }
+
+    /** {@code cot(1)} ≈ 0.64209 on an INTEGER operand. */
+    public void testCotOnIntegerArg() throws IOException {
+        assertFirstRowDouble(oneRow("key00") + "| eval v = cot(int0) | fields v", 1.0 / Math.tan(1.0));
+    }
+
     // ── conv(n, fromBase, toBase) ──────────────────────────────────────────
     // PPL `conv` lowers to ScalarFunction.CONVERT → ConvAdapter → substrait `conv` →
     // Rust UDF at rust/src/udf/conv.rs. Output is lowercase to match Java's
@@ -429,5 +453,6 @@ public class MathScalarFunctionsIT extends AnalyticsRestTestCase {
         assertTrue("Expected at least one row for query: " + ppl, rows.size() >= 1);
         return rows.get(0).get(0);
     }
+
 
 }
