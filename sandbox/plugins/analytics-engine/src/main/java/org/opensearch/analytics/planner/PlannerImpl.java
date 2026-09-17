@@ -440,9 +440,8 @@ public class PlannerImpl {
      * <ul>
      *   <li>{@link OpenSearchCheckedLongSumRule} and {@link OpenSearchCheckedLongSumWindowRule} —
      *       PPL's reflective {@code CHECKED_LONG_SUM} marker → Calcite's canonical {@code SUM}.</li>
-     *   <li>{@link OpenSearchDistinctCountRule} — single-arg {@code COUNT(DISTINCT x)} →
-     *       {@code APPROX_COUNT_DISTINCT(x)} so distinct counts engage the engine-native
-     *       HLL sketch merge instead of additive SUM-of-counts.</li>
+     *   <li>{@link OpenSearchDistinctCountRule} — rewrites only PPL's {@code distinct_count_approx} marker
+     *       to {@code APPROX_COUNT_DISTINCT} (engine-native HLL); exact {@code COUNT(DISTINCT)} stays exact.</li>
      *   <li>{@link OpenSearchAggregateReduceRule} — {@code AVG} / {@code STDDEV} / {@code VAR} →
      *       primitive {@code SUM} / {@code COUNT} (+ {@code SUM_SQ} for variance) plus a scalar
      *       {@link org.apache.calcite.rel.logical.LogicalProject} computing the quotient.</li>

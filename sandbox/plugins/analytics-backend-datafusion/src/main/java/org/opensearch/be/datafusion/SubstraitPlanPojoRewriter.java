@@ -13,8 +13,10 @@ import java.util.List;
 import java.util.Optional;
 
 import io.substrait.expression.Expression;
+import io.substrait.expression.FieldReference;
 import io.substrait.expression.ImmutableExpression;
 import io.substrait.plan.Plan;
+import io.substrait.relation.Aggregate;
 import io.substrait.relation.ExpressionCopyOnWriteVisitor;
 import io.substrait.relation.Project;
 import io.substrait.relation.Rel;
@@ -41,9 +43,56 @@ class SubstraitPlanPojoRewriter {
         List<Plan.Root> roots = new ArrayList<>();
         for (Plan.Root root : plan.getRoots()) {
             Optional<Rel> modified = root.getInput().accept(visitor, null);
-            roots.add(modified.isPresent() ? Plan.Root.builder().from(root).input(modified.get()).build() : root);
+            Rel input = modified.isPresent() ? modified.get() : root.getInput();
+            input = insertNamingBarrierAboveDistinctAggregate(input);
+            roots.add(Plan.Root.builder().from(root).input(input).build());
         }
         return Plan.builder().from(plan).roots(roots).build();
+    }
+
+    /**
+     * Inserts an identity {@link Project} between the plan root and a top-level {@link Aggregate} that
+     * carries a DISTINCT measure, so the root's output names land on the Project instead of on the
+     * aggregate's measures.
+     *
+     * <p><b>Why.</b> {@code Plan.Root.names()} is substrait-java's designated home for output column
+     * names, and datafusion-substrait's consumer applies them by aliasing the corresponding output
+     * expression. When the root's direct input is the Aggregate, that alias lands on the measure, so the
+     * measure arrives as {@code Expr::Alias(AggregateFunction)} rather than a bare
+     * {@code Expr::AggregateFunction}. DataFusion's {@code SingleDistinctToGroupBy::is_single_distinct_agg}
+     * matches only a bare aggregate, so it silently declines and exact {@code COUNT(DISTINCT)} stays a
+     * serial single-partition aggregate. DataFusion's own SQL planner never hits this because it puts the
+     * output alias in a Projection <em>above</em> the Aggregate — this restores that shape.
+     *
+     * <p>Scoped deliberately to roots whose input is an Aggregate with at least one distinct measure: the
+     * naming barrier is only needed where a distinct measure could be aliased, and narrowing it keeps
+     * plan shapes (and their goldens) unchanged for every other query.
+     *
+     * <p>Substrait {@code ProjectRel} emits {@code input fields ++ expressions}, so the identity Project
+     * carries one field reference per input field and a {@link Rel.Remap} selecting only the trailing
+     * expressions — preserving the aggregate's output arity and types exactly.
+     */
+    private static Rel insertNamingBarrierAboveDistinctAggregate(Rel input) {
+        if (input instanceof Aggregate == false) {
+            return input;
+        }
+        Aggregate agg = (Aggregate) input;
+        boolean hasDistinctMeasure = agg.getMeasures()
+            .stream()
+            .anyMatch(m -> m.getFunction().invocation() == Expression.AggregationInvocation.DISTINCT);
+        if (hasDistinctMeasure == false) {
+            return input;
+        }
+        List<io.substrait.type.Type> fields = agg.getRecordType().fields();
+        List<Expression> identity = new ArrayList<>(fields.size());
+        for (int i = 0; i < fields.size(); i++) {
+            identity.add(FieldReference.newRootStructReference(i, fields.get(i)));
+        }
+        return Project.builder()
+            .input(agg)
+            .expressions(identity)
+            .remap(Rel.Remap.offset(fields.size(), fields.size()))
+            .build();
     }
 
     /**
