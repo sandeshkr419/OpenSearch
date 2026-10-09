@@ -119,6 +119,18 @@ public class MinHashFilterFactoryTests extends OpenSearchTokenStreamTestCase {
         assertStreamHasNumberOfTokens(tokenFilterWithHashSetSize.create(tokenizerWithHashSetSize), 2);
     }
 
+    public void testUnboundedParametersRejected() {
+        Settings settings = Settings.builder()
+            .put("index.analysis.filter.test_min_hash.type", "min_hash")
+            .put("index.analysis.filter.test_min_hash.hash_count", "4000")
+            .put("index.analysis.filter.test_min_hash.bucket_count", "4000")
+            .put("index.analysis.filter.test_min_hash.hash_set_size", "1")
+            .put("index.analysis.filter.test_min_hash.with_rotation", false)
+            .put(Environment.PATH_HOME_SETTING.getKey(), createTempDir().toString())
+            .build();
+        expectThrows(IllegalArgumentException.class, () -> getTestAnalysisFromSettings(settings));
+    }
+
     private static OpenSearchTestCase.TestAnalysis getTestAnalysisFromSettings(Settings settingsWithBucketCount) throws IOException {
         return AnalysisTestsHelper.createTestAnalysisFromSettings(settingsWithBucketCount, new CommonAnalysisModulePlugin());
     }

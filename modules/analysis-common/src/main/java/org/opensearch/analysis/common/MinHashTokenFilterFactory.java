@@ -50,9 +50,40 @@ public class MinHashTokenFilterFactory extends AbstractTokenFilterFactory {
 
     private final MinHashFilterFactory minHashFilterFactory;
 
+    static final int MAX_HASH_COUNT = 128;
+    static final int MAX_BUCKET_COUNT = 65536;
+    static final int MAX_TOTAL_BUCKETS = 65536;
+
     MinHashTokenFilterFactory(IndexSettings indexSettings, Environment environment, String name, Settings settings) {
         super(indexSettings, name, settings);
+        validateSettings(settings);
         minHashFilterFactory = new MinHashFilterFactory(convertSettings(settings));
+    }
+
+    private static void validateSettings(Settings settings) {
+        int hashCount = settings.getAsInt("hash_count", 1);
+        int bucketCount = settings.getAsInt("bucket_count", 512);
+        int hashSetSize = settings.getAsInt("hash_set_size", 1);
+        if (hashCount < 1 || hashCount > MAX_HASH_COUNT) {
+            throw new IllegalArgumentException("[min_hash] hash_count must be between 1 and " + MAX_HASH_COUNT + ", got " + hashCount);
+        }
+        if (bucketCount < 1 || bucketCount > MAX_BUCKET_COUNT) {
+            throw new IllegalArgumentException(
+                "[min_hash] bucket_count must be between 1 and " + MAX_BUCKET_COUNT + ", got " + bucketCount
+            );
+        }
+        if (hashSetSize < 1) {
+            throw new IllegalArgumentException("[min_hash] hash_set_size must be >= 1, got " + hashSetSize);
+        }
+        long totalBuckets = (long) hashCount * bucketCount * hashSetSize;
+        if (totalBuckets > MAX_TOTAL_BUCKETS) {
+            throw new IllegalArgumentException(
+                "[min_hash] hash_count * bucket_count * hash_set_size ("
+                    + totalBuckets
+                    + ") exceeds the maximum allowed value of "
+                    + MAX_TOTAL_BUCKETS
+            );
+        }
     }
 
     @Override
